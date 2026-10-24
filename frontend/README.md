@@ -5,7 +5,7 @@ Next.js App Router + React 19 + strict TypeScript + Tailwind CSS + `shadcn/ui` f
 ## Technology Stack
 
 - **Framework:** Next.js 16 (App Router) + React 19 + strict TypeScript
-- **Styling & Design System:** Tailwind CSS, `shadcn/ui` primitives, Lucide icons, SOC dark-first theme with optional light mode
+- **Styling & Design System:** Tailwind CSS 4 (CSS-first `@theme` tokens in `styles/globals.css`), `tw-animate-css`, `shadcn/ui` primitives, Lucide icons, SOC dark-first theme with optional light mode
 - **Forms & Validation:** React Hook Form + Zod (matching backend password, token, and field rules)
 - **Telemetry Charts:** Recharts
 - **QR Code Rendering:** Client-side SVG generation via `qrcode` (never sends TOTP URIs to external services)

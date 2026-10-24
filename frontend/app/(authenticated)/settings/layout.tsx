@@ -63,7 +63,7 @@ export default function SettingsLayout({
               className={cn(
                 "inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-xs sm:text-sm font-medium transition-all",
                 active
-                  ? "bg-card text-cyan-500 dark:text-cyan-300 border border-cyan-500/35 shadow-sm"
+                  ? "bg-card text-cyan-500 dark:text-cyan-300 border border-cyan-500/35 shadow-xs"
                   : "text-muted-foreground hover:bg-surface-elevated hover:text-foreground border border-transparent"
               )}
             >

@@ -14,7 +14,7 @@ export function CyberLogo({
 }: CyberLogoProps) {
   return (
     <div className={cn("inline-flex items-center gap-2.5 select-none", className)}>
-      <div className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-cyan-500/40 bg-gradient-to-br from-cyan-500/20 via-sky-500/10 to-violet-500/15 shadow-sm">
+      <div className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-cyan-500/40 bg-gradient-to-br from-cyan-500/20 via-sky-500/10 to-violet-500/15 shadow-xs">
         <svg
           viewBox="0 0 32 32"
           fill="none"

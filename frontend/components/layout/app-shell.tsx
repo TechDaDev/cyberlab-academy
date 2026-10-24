@@ -101,7 +101,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     className={cn(
                       "group flex items-center gap-3 rounded-lg px-2.5 py-2 text-sm font-medium transition-all",
                       isActive
-                        ? "bg-cyan-500/15 text-cyan-500 dark:text-cyan-300 border border-cyan-500/30 shadow-sm"
+                        ? "bg-cyan-500/15 text-cyan-500 dark:text-cyan-300 border border-cyan-500/30 shadow-xs"
                         : "text-muted-foreground hover:bg-surface-elevated hover:text-foreground border border-transparent",
                       collapsed && !isMobileDrawer && "justify-center px-2"
                     )}
@@ -230,7 +230,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         {mobileOpen ? (
           <div className="fixed inset-0 z-50 lg:hidden" role="dialog" aria-modal="true">
             <div
-              className="fixed inset-0 bg-slate-950/75 backdrop-blur-sm"
+              className="fixed inset-0 bg-slate-950/75 backdrop-blur-xs"
               onClick={() => setMobileOpen(false)}
             />
             <aside className="fixed inset-y-0 left-0 z-50 flex w-72 max-w-[85vw] flex-col border-r border-border bg-card shadow-2xl">
@@ -285,7 +285,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   <button
                     type="button"
                     aria-label="Open profile menu"
-                    className="inline-flex items-center gap-2 rounded-full border border-border bg-surface-elevated/80 p-1 pr-2.5 text-left text-xs transition-colors hover:border-cyan-500/40 focus:outline-none focus:ring-2 focus:ring-ring"
+                    className="inline-flex items-center gap-2 rounded-full border border-border bg-surface-elevated/80 p-1 pr-2.5 text-left text-xs transition-colors hover:border-cyan-500/40 focus:outline-hidden focus:ring-2 focus:ring-ring"
                   >
                     <span className="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-cyan-500 to-teal-500 font-display text-xs font-bold text-slate-950">
                       {initials || "CL"}
