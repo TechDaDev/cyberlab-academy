@@ -42,7 +42,7 @@ def admin_ready(c, dbmaker):
         bootstrap_admin(db, email="admin@example.org", full_name="Synthetic Administrator", password=PASSWORD)
     assert login(c, "admin@example.org").status_code == 200
     assert c.post("/api/v1/auth/active-role", json={"role": "administrator"}).status_code == 403
-    enrolled = c.post("/api/v1/auth/mfa/enroll")
+    enrolled = c.post("/api/v1/auth/mfa/enroll", json={"password": PASSWORD})
     assert enrolled.status_code == 200, enrolled.text
     code = pyotp.TOTP(enrolled.json()["secret"]).now()
     confirmed = c.post("/api/v1/auth/mfa/confirm", json={"code": code})
@@ -220,7 +220,7 @@ def test_registration_validation_and_mfa_recovery_code(client):
     with dbmaker() as db:
         bootstrap_admin(db, email="admin@example.org", full_name="Synthetic Administrator", password=PASSWORD)
     assert login(c, "admin@example.org").status_code == 200
-    secret = c.post("/api/v1/auth/mfa/enroll").json()["secret"]
+    secret = c.post("/api/v1/auth/mfa/enroll", json={"password": PASSWORD}).json()["secret"]
     recovery = c.post("/api/v1/auth/mfa/confirm", json={"code":pyotp.TOTP(secret).now()}).json()["recovery_codes"][0]
     stepped = c.post("/api/v1/auth/reauthenticate", json={"password":PASSWORD,"mfa_code":recovery})
     assert stepped.status_code == 200, stepped.text
@@ -287,7 +287,7 @@ def test_manager_mfa_policy_blocks_activation_until_enrollment(client, tmp_path,
         manager.headers.update(ORIGIN)
         assert login(manager, "mfa-manager@example.org").status_code == 200
         assert manager.post("/api/v1/auth/active-role", json={"role":"manager"}).status_code == 403
-        enrollment = manager.post("/api/v1/auth/mfa/enroll")
+        enrollment = manager.post("/api/v1/auth/mfa/enroll", json={"password": PASSWORD})
         assert enrollment.status_code == 200
         code = pyotp.TOTP(enrollment.json()["secret"]).now()
         assert manager.post("/api/v1/auth/mfa/confirm", json={"code":code}).status_code == 200

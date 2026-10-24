@@ -63,7 +63,7 @@ def admin_ready(c, dbmaker):
     with dbmaker() as db:
         bootstrap_admin(db, email="pg-admin@example.org", full_name="Postgres Administrator", password=PASSWORD)
     assert login(c, "pg-admin@example.org").status_code == 200
-    enrollment = c.post("/api/v1/auth/mfa/enroll")
+    enrollment = c.post("/api/v1/auth/mfa/enroll", json={"password": PASSWORD})
     assert enrollment.status_code == 200, enrollment.text
     assert c.post("/api/v1/auth/mfa/confirm", json={"code":pyotp.TOTP(enrollment.json()["secret"]).now()}).status_code == 200
     assert c.post("/api/v1/auth/active-role", json={"role":"administrator"}).status_code == 200
@@ -124,7 +124,7 @@ def test_postgres_concurrent_last_admin_protection(postgres_client, tmp_path):
     with TestClient(app) as second:
         second.headers.update(ORIGIN)
         assert login(second, "pg-second@example.org").status_code == 200
-        enrollment = second.post("/api/v1/auth/mfa/enroll")
+        enrollment = second.post("/api/v1/auth/mfa/enroll", json={"password": PASSWORD})
         assert enrollment.status_code == 200
         code = pyotp.TOTP(enrollment.json()["secret"]).now()
         assert second.post("/api/v1/auth/mfa/confirm", json={"code":code}).status_code == 200

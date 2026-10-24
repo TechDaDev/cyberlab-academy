@@ -122,9 +122,15 @@ def test_mfa_secrets_and_recovery_codes_are_not_stored_or_exposed(client):
         bootstrap_admin(db, email="mfa-admin@example.org", full_name="Synthetic Administrator",
                         password=PASSWORD)
     assert login(c, "mfa-admin@example.org").status_code == 200
-    secret = c.post("/api/v1/auth/mfa/enroll").json()["secret"]
-    codes = c.post("/api/v1/auth/mfa/confirm",
-                   json={"code": pyotp.TOTP(secret).now()}).json()["recovery_codes"]
+    assert c.post("/api/v1/auth/mfa/enroll").status_code == 422
+    assert c.post("/api/v1/auth/mfa/enroll", json={"password": "Wrong-Password-2026!"}).status_code == 401
+    with TestClient(app) as older_session:
+        older_session.headers.update(ORIGIN)
+        assert login(older_session, "mfa-admin@example.org").status_code == 200
+        secret = c.post("/api/v1/auth/mfa/enroll", json={"password": PASSWORD}).json()["secret"]
+        codes = c.post("/api/v1/auth/mfa/confirm",
+                       json={"code": pyotp.TOTP(secret).now()}).json()["recovery_codes"]
+        assert older_session.get("/api/v1/users/me").status_code == 401
     with dbmaker() as db:
         enrollment = db.query(MFAEnrollment).one()
         assert enrollment.enabled

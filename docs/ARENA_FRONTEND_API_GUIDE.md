@@ -52,12 +52,12 @@ Local mail provider `dev_capture` stores private mode-0600 JSON messages in `MAI
 | `DELETE /users/me/sessions/{session_id}` | none | 204; own session only |
 | `POST /auth/logout` | none | 204; current cookie revoked and deleted |
 | `POST /auth/logout-all` | none | 204; all sessions revoked |
-| `POST /auth/mfa/enroll` | none | 200 `MFAEnrollResponse` with secret and QR URI |
+| `POST /auth/mfa/enroll` | `password` | 200 `MFAEnrollResponse` with secret and QR URI; needs authentication within five minutes |
 | `POST /auth/mfa/confirm` | `code` | 200 `MFARecoveryCodes`; eight codes shown once |
 
 `UserPublic` has `id`, `full_name`, `email`, `roles`, `active_role`, `email_verified`, and `created_at`. It contains no password hash or token. `SessionPublic` has `id`, `active_role`, `created_at`, `expires_at`, `current`, and `mfa_verified`.
 
-For MFA, show the enrollment URI as a QR code. Ask for a current six-digit TOTP. Give recovery codes to the user once; the API cannot retrieve them later. A recovery code may be submitted as `mfa_code` during reauthentication and works once. TOTP secrets are encrypted using `MFA_ENCRYPTION_KEY`; recovery code hashes are stored. Administrator APIs require an active Administrator session with MFA.
+For MFA, show the enrollment URI as a QR code. Ask for a current six-digit TOTP. Give recovery codes to the user once; the API cannot retrieve them later. A recovery code may be submitted as `mfa_code` during reauthentication and works once. Enrollment requires the current password and rotates the session cookie; confirming enrollment revokes every other session for that account. TOTP secrets are encrypted using `MFA_ENCRYPTION_KEY`; recovery code hashes are stored. Administrator APIs require an active Administrator session with MFA.
 
 ## Manager and Administrator endpoints
 

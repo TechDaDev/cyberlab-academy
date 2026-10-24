@@ -65,6 +65,10 @@ class ReauthenticateRequest(BaseModel):
     mfa_code: str | None = None
 
 
+class MFAEnrollRequest(BaseModel):
+    password: str
+
+
 class MFAConfirmRequest(BaseModel):
     code: str
 

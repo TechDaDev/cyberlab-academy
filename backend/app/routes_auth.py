@@ -4,7 +4,7 @@ import secrets
 from datetime import timedelta
 
 import pyotp
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DbSession
@@ -14,8 +14,8 @@ from .database import get_db
 from .mail import send_link
 from .models import AuditEvent, InstructorRequest, MFAEnrollment, MFARecoveryCode, OneTimeToken, Role, Session, User, UserRole
 from .schemas import (ChangeEmailRequest, ChangePasswordRequest, EmailRequest, LoginRequest,
-                      MFAConfirmRequest, MFAEnrollResponse, MFARecoveryCodes, Message,
-                      ProfileUpdate, ReauthenticateRequest, RegisterRequest,
+                      MFAConfirmRequest, MFAEnrollRequest, MFAEnrollResponse, MFARecoveryCodes,
+                      Message, ProfileUpdate, ReauthenticateRequest, RegisterRequest,
                       ResetPasswordRequest, SessionPublic, SwitchRoleRequest,
                       TokenRequest, UserPublic)
 from .security import (SESSION_COOKIE, aware, check_rate_limit, consume_mfa, decrypt_secret,
@@ -64,7 +64,8 @@ def valid_token(db: DbSession, raw: str, kinds: tuple[str, ...]) -> OneTimeToken
 
 
 @router.post("/auth/register", response_model=Message, status_code=202)
-def register(payload: RegisterRequest, request: Request, db: DbSession = Depends(get_db)):
+def register(payload: RegisterRequest, request: Request, background_tasks: BackgroundTasks,
+             db: DbSession = Depends(get_db)):
     require_origin(request)
     email = normalize_email(str(payload.email))
     check_rate_limit(db, request, "register_ip", limit=20, seconds=3600)
@@ -88,7 +89,8 @@ def register(payload: RegisterRequest, request: Request, db: DbSession = Depends
         token = issue_token(db, user, "verify_email", 60)
         db.add(AuditEvent(subject_id=user.id, action="account.registered"))
         db.commit()
-        send_link(email, "verify_email", token)
+        # Delivery runs after the response so callers cannot measure account existence.
+        background_tasks.add_task(send_link, email, "verify_email", token)
     else:
         # Keep response shape and hashing cost similar for an existing account.
         hash_password(payload.password)
@@ -96,7 +98,8 @@ def register(payload: RegisterRequest, request: Request, db: DbSession = Depends
 
 
 @router.post("/auth/verification/resend", response_model=Message)
-def resend_verification(payload: EmailRequest, request: Request, db: DbSession = Depends(get_db)):
+def resend_verification(payload: EmailRequest, request: Request, background_tasks: BackgroundTasks,
+                        db: DbSession = Depends(get_db)):
     require_origin(request)
     email = normalize_email(str(payload.email))
     check_rate_limit(db, request, "verify_resend", email, limit=3, seconds=3600)
@@ -106,7 +109,7 @@ def resend_verification(payload: EmailRequest, request: Request, db: DbSession =
         token = issue_token(db, user, "verify_email", 60)
         db.add(AuditEvent(subject_id=user.id, action="email.verification_requested"))
         db.commit()
-        send_link(email, "verify_email", token)
+        background_tasks.add_task(send_link, email, "verify_email", token)
     return Message(message="If eligible, a verification email has been sent")
 
 
@@ -308,7 +311,7 @@ def change_password(payload: ChangePasswordRequest, request: Request, response: 
 
 
 @router.post("/users/me/email", response_model=Message)
-def change_email(payload: ChangeEmailRequest, request: Request,
+def change_email(payload: ChangeEmailRequest, request: Request, background_tasks: BackgroundTasks,
                  context: AuthContext = Depends(get_auth_context), db: DbSession = Depends(get_db)):
     require_origin(request)
     check_rate_limit(db, request, "change_email", context.user.email, limit=3, seconds=3600)
@@ -319,12 +322,13 @@ def change_email(payload: ChangeEmailRequest, request: Request,
         token = issue_token(db, context.user, "change_email", 60, new_email)
         db.add(AuditEvent(actor_id=context.user.id, subject_id=context.user.id, action="email.change_requested"))
         db.commit()
-        send_link(new_email, "verify_email", token)
+        background_tasks.add_task(send_link, new_email, "verify_email", token)
     return Message(message="If eligible, check the new email address")
 
 
 @router.post("/auth/forgot-password", response_model=Message)
-def forgot_password(payload: EmailRequest, request: Request, db: DbSession = Depends(get_db)):
+def forgot_password(payload: EmailRequest, request: Request, background_tasks: BackgroundTasks,
+                    db: DbSession = Depends(get_db)):
     require_origin(request)
     email = normalize_email(str(payload.email))
     check_rate_limit(db, request, "forgot_ip", limit=20, seconds=3600)
@@ -335,7 +339,7 @@ def forgot_password(payload: EmailRequest, request: Request, db: DbSession = Dep
         token = issue_token(db, user, "reset_password", 30)
         db.add(AuditEvent(subject_id=user.id, action="password.reset_requested"))
         db.commit()
-        send_link(email, "reset_password", token)
+        background_tasks.add_task(send_link, email, "reset_password", token)
     return Message(message="If the account exists, a reset email has been sent")
 
 
@@ -356,10 +360,16 @@ def reset_password(payload: ResetPasswordRequest, request: Request, db: DbSessio
 
 
 @router.post("/auth/mfa/enroll", response_model=MFAEnrollResponse)
-def enroll_mfa(request: Request, context: AuthContext = Depends(get_auth_context), db: DbSession = Depends(get_db)):
+def enroll_mfa(payload: MFAEnrollRequest, request: Request,
+               context: AuthContext = Depends(get_auth_context), db: DbSession = Depends(get_db)):
     require_origin(request)
     if aware(context.session.authenticated_at) < now() - timedelta(minutes=5):
         raise HTTPException(status_code=403, detail="Recent authentication required")
+    check_rate_limit(db, request, "mfa_enroll", context.user.email, limit=5, seconds=300)
+    if not verify_password(payload.password, context.user.password_hash):
+        db.add(AuditEvent(actor_id=context.user.id, action="auth.mfa_enrollment_failed"))
+        db.commit()
+        raise HTTPException(status_code=401, detail="Invalid credentials")
     existing = db.get(MFAEnrollment, context.user.id)
     if existing and existing.enabled:
         raise HTTPException(status_code=409, detail="MFA already enabled")
@@ -389,6 +399,8 @@ def confirm_mfa(payload: MFAConfirmRequest, request: Request, response: Response
     context.session.mfa_verified_at = now()
     context.session.authenticated_at = now()
     rotate_session(context, response)
+    # A new second factor must not leave older password-only sessions usable.
+    revoke_user_sessions(db, context.user.id, except_id=context.session.id)
     db.add(AuditEvent(actor_id=context.user.id, action="mfa.enabled"))
     db.commit()
     return MFARecoveryCodes(recovery_codes=codes)

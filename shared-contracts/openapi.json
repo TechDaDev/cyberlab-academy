@@ -241,6 +241,19 @@
         "title": "MFAConfirmRequest",
         "type": "object"
       },
+      "MFAEnrollRequest": {
+        "properties": {
+          "password": {
+            "title": "Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "password"
+        ],
+        "title": "MFAEnrollRequest",
+        "type": "object"
+      },
       "MFAEnrollResponse": {
         "properties": {
           "otpauth_uri": {
@@ -1299,6 +1312,16 @@
     "/api/v1/auth/mfa/enroll": {
       "post": {
         "operationId": "enroll_mfa_api_v1_auth_mfa_enroll_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MFAEnrollRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {
@@ -1309,6 +1332,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [
