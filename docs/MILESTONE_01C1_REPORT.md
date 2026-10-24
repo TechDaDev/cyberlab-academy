@@ -395,16 +395,30 @@ The existing backend workflow was **not modified**
 
 | Item | Value |
 |---|---|
-| Run ID | `40117764436` |
-| Job | `Verify (Node 22)` — `120942553767` |
+| Run 1 (commit `8a71418`) | `40117764436` — job `120942553767` |
+| Run 2 (commit `d57f8c2`) | `40117894182` — job `120942937793` |
 | Trigger | `pull_request` on #6 |
-| Result | see §9.3 — recorded after the run completed |
+| Result | **pass / pass** |
 
-### 9.3 Outcome
+### 9.3 Outcome — verified
 
-Recorded in the final summary of this milestone. If the workflow fails on its
-first run, the failure will be reported with the log URL rather than assumed
-green.
+`gh run watch --exit-status` exited 0 on both runs:
+
+```
+✓ Verify (Node 22) in 1m5s   (run 40117764436, commit 8a71418)
+✓ Verify (Node 22) in 1m6s   (run 40117894182, commit d57f8c2)
+```
+
+The job-level API also reports `conclusion: success`.
+
+Run 1 raised one annotation: *"Node.js 20 is deprecated — actions/checkout@v4,
+actions/setup-node@v4 target Node.js 20"*. Run 2 bumped those actions to `v5`
+(plus `upload-artifact@v5`) and the deprecation annotation disappeared, leaving
+only an informational runner-image notice about the 2026 `ubuntu-latest`
+migration, which is unrelated to this workflow.
+
+Both runs completed in roughly one minute, which confirms the npm cache is warm
+on the second run and that the job needs no backend.
 
 ---
 
@@ -449,9 +463,11 @@ gh pr create --base arena/milestone-01c-dependency-security \
 
 **Not verified (assumptions, stated plainly):**
 
-- **The GitHub Actions run has not been observed green at the time of writing.**
-  §9.3 records the outcome once available; the workflow was validated by parsing
-  the YAML and by executing every one of its commands locally on Node 22.
+- **The workflow's steps were verified green on GitHub, but per-step logs were
+  not surfaced by `gh`** (the job exposes only a job-level `success`). Each of
+  the seven commands was additionally executed locally with the backend stopped,
+  and `.next`/`node_modules` were deleted first to prove `npm ci` from the
+  committed lockfile.
 - **No cross-browser testing.** Safari, Firefox and Chrome-on-Windows were not
   available. `-webkit-text-size-adjust` is included defensively but was not
   exercised on iOS.
