@@ -84,7 +84,8 @@ def logout(request: Request, response: Response, db: DbSession = Depends(get_db)
             record.revoked = True
             db.commit()
     response.delete_cookie(SESSION_COOKIE, path="/")
-    return Response(status_code=204, headers={"set-cookie": f"{SESSION_COOKIE}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax"})
+    response.status_code = 204
+    return response
 
 @router.get("/users/me", response_model=UserPublic)
 def me(user: User = Depends(get_current_user)):
