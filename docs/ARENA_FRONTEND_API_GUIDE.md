@@ -31,7 +31,9 @@ Start the API with `python -m app.run`. It binds to `127.0.0.1:8000` by default 
 | `POST /auth/forgot-password` | `email` | 200 generic `Message` | 403, 429 |
 | `POST /auth/reset-password` | `token`, `password`, `password_confirmation` | 200 `Message`; revokes sessions | 400, 403, 422, 429 |
 
-Passwords must be 12–128 characters. They cannot contain the email name or full name. Verification tokens expire after 60 minutes; reset tokens expire after 30 minutes. Both work once. Only SHA-256 token digests are stored. Forgot-password and registration responses do not reveal whether an address exists.
+Passwords must be 12–128 characters. They cannot contain the email name or full name. Verification tokens expire after 60 minutes; reset tokens expire after 30 minutes. Both work once, and concurrent submission of the same token allows exactly one success. Only SHA-256 token digests are stored. Forgot-password and registration responses do not reveal whether an address exists.
+
+Abuse controls are per client address and per account. Login allows 8 attempts per address for the same email in 5 minutes, 40 attempts per address, and 20 account-wide attempts in 15 minutes. Registration allows 5 requests per address for the same email and 5 account-wide requests per hour. Verification resend allows 3 requests per address for the same email and 5 account-wide requests per hour. Forgot password allows 3 requests per address for the same email and 5 account-wide requests per hour. A limit returns `429` with a generic `detail`; frontends should back off and must not treat `429` as proof that an account exists.
 
 Local mail provider `dev_capture` stores private mode-0600 JSON messages in `MAIL_CAPTURE_DIR` (default `/tmp/cyberlab-mail`). No public API reads those files. For delivery, configure `MAIL_PROVIDER=smtp`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `MAIL_FROM`, and `FRONTEND_URL`. Production mode rejects the capture provider. Frontend routes `/verify-email` and `/reset-password` must read the link token and submit it to the corresponding API route.
 

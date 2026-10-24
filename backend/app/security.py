@@ -37,7 +37,8 @@ def require_strong_password(password: str, *, email: str = "", full_name: str = 
     lowered = password.casefold()
     if lowered in {"passwordpassword", "123456789012", "qwertyqwerty"}:
         raise HTTPException(status_code=422, detail="Password is too common")
-    if email and normalize_email(email).split("@", 1)[0] in lowered:
+    local_part = normalize_email(email).split("@", 1)[0] if email else ""
+    if len(local_part) >= 4 and local_part in lowered:
         raise HTTPException(status_code=422, detail="Password must not contain email name")
     if full_name and len(full_name.strip()) >= 4 and full_name.strip().casefold() in lowered:
         raise HTTPException(status_code=422, detail="Password must not contain full name")
@@ -70,10 +71,12 @@ def require_origin(request: Request) -> None:
         raise HTTPException(status_code=403, detail="Trusted Origin required")
 
 
-def check_rate_limit(db: DbSession, request: Request, action: str, identity: str = "", limit: int = 10, seconds: int = 60) -> None:
+def check_rate_limit(db: DbSession, request: Request, action: str, identity: str = "",
+                     limit: int = 10, seconds: int = 60, *, client_scoped: bool = True) -> None:
     # Hash the identity and client address so the table does not store either value.
     client = request.client.host if request.client else "unknown"
-    key = hashlib.sha256(f"{action}:{client}:{normalize_email(identity)}".encode()).hexdigest()
+    subject = f"{client}:{normalize_email(identity)}" if client_scoped else normalize_email(identity)
+    key = hashlib.sha256(f"{action}:{subject}".encode()).hexdigest()
     if db.bind is not None and db.bind.dialect.name == "postgresql":
         lock_key = int(key[:15], 16)
         db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key})

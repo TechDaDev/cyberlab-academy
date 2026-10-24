@@ -167,6 +167,8 @@ def decide_request(application_id: str, decision: str, payload: InstructorDecisi
         raise HTTPException(status_code=403, detail="Cannot decide own application")
     target = get_target(db, application.user_id)
     require_target_access(context, target)
+    if not target.is_active:
+        raise HTTPException(status_code=409, detail="Applicant account is inactive")
     if not target.email_verified:
         raise HTTPException(status_code=409, detail="Applicant email is not verified")
     if decision == "approved" and Role.instructor not in {entry.role for entry in target.roles}:

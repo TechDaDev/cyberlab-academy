@@ -18,7 +18,9 @@ def bootstrap_admin(db: DbSession, *, email: str, full_name: str, password: str)
     if db.get_bind().dialect.name == "postgresql":
         db.execute(text("SELECT pg_advisory_xact_lock(4170101)"))
     existing = db.scalar(select(func.count()).select_from(UserRole).where(UserRole.role == Role.administrator)) or 0
-    if existing or db.scalar(select(User.id).where(User.email == address)):
+    previous_bootstrap = db.scalar(select(func.count()).select_from(AuditEvent).where(
+        AuditEvent.action == "administrator.bootstrapped")) or 0
+    if existing or previous_bootstrap or db.scalar(select(User.id).where(User.email == address)):
         raise ValueError("Administrator bootstrap already completed or email exists")
     user = User(full_name=full_name.strip(), email=address, password_hash=hash_password(password), email_verified=True)
     user.roles.extend((UserRole(role=Role.student), UserRole(role=Role.administrator)))

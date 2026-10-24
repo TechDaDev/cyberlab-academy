@@ -97,6 +97,21 @@ def test_postgres_migration_and_independent_sessions(postgres_client, tmp_path):
         assert second.get("/api/v1/users/me").status_code == 401
 
 
+def test_postgres_concurrent_verification_token_is_single_use(postgres_client, tmp_path):
+    c, dbmaker, engine = postgres_client
+    assert register(c, "token-race@example.org").status_code == 202
+    token = latest_token(tmp_path / "mail")
+    with TestClient(app) as first, TestClient(app) as second:
+        first.headers.update(ORIGIN)
+        second.headers.update(ORIGIN)
+        def submit(client):
+            return client.post("/api/v1/auth/verify-email", json={"token": token}).status_code
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            statuses = [future.result() for future in (
+                executor.submit(submit, first), executor.submit(submit, second))]
+    assert sorted(statuses) == [200, 400]
+
+
 def test_postgres_concurrent_last_admin_protection(postgres_client, tmp_path):
     first, dbmaker, engine = postgres_client
     first_id = admin_ready(first, dbmaker)

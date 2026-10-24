@@ -5,7 +5,7 @@ from datetime import timedelta
 
 import pyotp
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DbSession
 
@@ -50,8 +50,15 @@ def issue_token(db: DbSession, user: User, kind: str, minutes: int, target_email
 
 def valid_token(db: DbSession, raw: str, kinds: tuple[str, ...]) -> OneTimeToken:
     record = db.scalar(select(OneTimeToken).where(
-        OneTimeToken.token_digest == digest_token(raw), OneTimeToken.kind.in_(kinds)).with_for_update())
+        OneTimeToken.token_digest == digest_token(raw), OneTimeToken.kind.in_(kinds)))
     if record is None or record.consumed_at is not None or aware(record.expires_at) <= now():
+        raise HTTPException(status_code=400, detail="Invalid or expired token")
+    # Claim the token atomically so concurrent submissions cannot both succeed.
+    claimed = db.execute(update(OneTimeToken).where(
+        OneTimeToken.id == record.id, OneTimeToken.consumed_at.is_(None),
+        OneTimeToken.expires_at > now()).values(consumed_at=now())
+        .execution_options(synchronize_session=False))
+    if claimed.rowcount != 1:
         raise HTTPException(status_code=400, detail="Invalid or expired token")
     return record
 
@@ -62,9 +69,13 @@ def register(payload: RegisterRequest, request: Request, db: DbSession = Depends
     email = normalize_email(str(payload.email))
     check_rate_limit(db, request, "register_ip", limit=20, seconds=3600)
     check_rate_limit(db, request, "register", email, limit=5, seconds=3600)
-    require_strong_password(payload.password, email=email, full_name=payload.full_name)
+    check_rate_limit(db, request, "register_account", email, limit=5, seconds=3600, client_scoped=False)
+    full_name = payload.full_name.strip()
+    if len(full_name) < 2:
+        raise HTTPException(status_code=422, detail="Full name must contain at least 2 characters")
+    require_strong_password(payload.password, email=email, full_name=full_name)
     if db.scalar(select(User.id).where(User.email == email)) is None:
-        user = User(full_name=payload.full_name.strip(), email=email, password_hash=hash_password(payload.password))
+        user = User(full_name=full_name, email=email, password_hash=hash_password(payload.password))
         user.roles.append(UserRole(role=Role.student))
         db.add(user)
         try:
@@ -89,6 +100,7 @@ def resend_verification(payload: EmailRequest, request: Request, db: DbSession =
     require_origin(request)
     email = normalize_email(str(payload.email))
     check_rate_limit(db, request, "verify_resend", email, limit=3, seconds=3600)
+    check_rate_limit(db, request, "verify_resend_account", email, limit=5, seconds=3600, client_scoped=False)
     user = db.scalar(select(User).where(User.email == email))
     if user and not user.email_verified:
         token = issue_token(db, user, "verify_email", 60)
@@ -115,7 +127,6 @@ def verify_email(payload: TokenRequest, request: Request, db: DbSession = Depend
     else:
         action = "email.verified"
     user.email_verified = True
-    record.consumed_at = now()
     db.add(AuditEvent(subject_id=user.id, action=action))
     try:
         db.commit()
@@ -131,15 +142,21 @@ def login(payload: LoginRequest, request: Request, response: Response, db: DbSes
     email = normalize_email(str(payload.email))
     check_rate_limit(db, request, "login_ip", limit=40, seconds=300)
     check_rate_limit(db, request, "login", email, limit=8, seconds=300)
+    check_rate_limit(db, request, "login_account", email, limit=20, seconds=900, client_scoped=False)
     user = db.scalar(select(User).where(User.email == email))
     valid = verify_password(payload.password, user.password_hash if user else DUMMY_HASH)
     if user is None or not valid or not user.is_active:
         db.add(AuditEvent(subject_id=user.id if user else None, action="auth.login_failed"))
         db.commit()
         raise HTTPException(status_code=401, detail="Invalid credentials")
+    assigned = {entry.role for entry in user.roles}
+    if not assigned:
+        db.add(AuditEvent(subject_id=user.id, action="auth.login_failed"))
+        db.commit()
+        raise HTTPException(status_code=401, detail="Invalid credentials")
     token = make_session_token()
     session = Session(user_id=user.id, token_digest=digest_token(token),
-                      active_role=Role.student if Role.student in {entry.role for entry in user.roles} else user.roles[0].role,
+                      active_role=Role.student if Role.student in assigned else sorted(assigned, key=lambda item: item.value)[0],
                       expires_at=expires_at())
     db.add(session)
     db.add(AuditEvent(actor_id=user.id, action="auth.login"))
@@ -210,7 +227,10 @@ def me(context: AuthContext = Depends(get_auth_context)):
 def update_profile(payload: ProfileUpdate, request: Request, context: AuthContext = Depends(get_auth_context),
                    db: DbSession = Depends(get_db)):
     require_origin(request)
-    context.user.full_name = payload.full_name.strip()
+    full_name = payload.full_name.strip()
+    if len(full_name) < 2:
+        raise HTTPException(status_code=422, detail="Full name must contain at least 2 characters")
+    context.user.full_name = full_name
     db.add(AuditEvent(actor_id=context.user.id, subject_id=context.user.id, action="profile.updated"))
     db.commit()
     return as_public(context.user, context.session)
@@ -309,6 +329,7 @@ def forgot_password(payload: EmailRequest, request: Request, db: DbSession = Dep
     email = normalize_email(str(payload.email))
     check_rate_limit(db, request, "forgot_ip", limit=20, seconds=3600)
     check_rate_limit(db, request, "forgot_password", email, limit=3, seconds=3600)
+    check_rate_limit(db, request, "forgot_account", email, limit=5, seconds=3600, client_scoped=False)
     user = db.scalar(select(User).where(User.email == email))
     if user and user.is_active:
         token = issue_token(db, user, "reset_password", 30)
@@ -328,7 +349,6 @@ def reset_password(payload: ResetPasswordRequest, request: Request, db: DbSessio
         raise HTTPException(status_code=400, detail="Invalid or expired token")
     require_strong_password(payload.password, email=user.email, full_name=user.full_name)
     user.password_hash = hash_password(payload.password)
-    record.consumed_at = now()
     revoke_user_sessions(db, user.id)
     db.add(AuditEvent(subject_id=user.id, action="password.reset"))
     db.commit()
