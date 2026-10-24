@@ -10,7 +10,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
 from app.main import app
-from app.models import User, UserRole, Role
+from app.models import InstructorRequest, User, UserRole, Role
 
 @pytest.fixture
 def client(monkeypatch):
@@ -58,6 +58,9 @@ def test_instructor_application_does_not_grant_role(client):
     response = signup(c, instructor=True)
     assert response.status_code == 201
     assert response.json()["roles"] == ["student"]
+    with dbmaker() as db:
+        request = db.query(InstructorRequest).filter_by(user_id=response.json()["id"]).one()
+        assert request.status == "pending"
 
 def test_cross_site_profile_change_blocked(client):
     c, _ = client
