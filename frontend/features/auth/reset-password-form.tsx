@@ -18,6 +18,7 @@ import {
 import { authApi } from "@/lib/api/auth";
 import { ApiError } from "@/lib/api/errors";
 import { PasswordStrengthChecklist } from "@/components/shared/password-strength-checklist";
+import { scrubOneTimeTokenFromUrl } from "@/lib/scrub-token-url";
 import {
   resetPasswordSchema,
   type ResetPasswordFormValues,
@@ -39,7 +40,13 @@ import { Label } from "@/components/ui/label";
 export function ResetPasswordForm() {
   const searchParams = useSearchParams();
   const { clearLocalSession } = useAuth();
-  const rawToken = searchParams?.get("token")?.trim() ?? "";
+  // Capture the reset token once and remove it from the address bar; the form keeps
+  // using the captured value for its single submission.
+  const [rawToken] = React.useState(() => searchParams?.get("token")?.trim() ?? "");
+  React.useEffect(() => {
+    if (rawToken) scrubOneTimeTokenFromUrl();
+  }, [rawToken]);
+
   const isTokenPresent = rawToken.length >= 20 && rawToken.length <= 200;
 
   const [showPassword, setShowPassword] = React.useState(false);
