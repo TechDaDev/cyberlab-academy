@@ -228,18 +228,20 @@ Also verified: a wrong/expired TOTP code is rejected (`401`) and the code could 
 | Origin/CSRF | `origin` and `sec-fetch-site` are forwarded, so FastAPI's origin check runs on every mutation; forged/missing origins return `403` through the proxy |
 | Path handling | `..`, `.`, empty, backslash and scheme segments rejected with `400`; `%2e%2e` and encoded slashes never reach FastAPI (`404`/`405`) |
 | Error mapping | unreachable backend → `503 {"code":"BACKEND_UNREACHABLE"}`; upstream `401/403/409` pass through unchanged |
-| Secret leakage | no tokens in URLs, logs, storage or HTML; `Cache-Control: no-store` and `Referrer-Policy` headers preserved; mail tokens exist only in the private capture directory |
+| Secret leakage | no tokens in localStorage/sessionStorage, logs or HTML; mail tokens exist only in the private capture directory. **Correction (see §17):** the original version of this report claimed tokens never appear in URLs. Mail links *are* query-token links by design, and the token previously stayed in the address bar after use. This has since been fixed. |
+| Request body size | capped by the proxy (`413 BODY_TOO_LARGE`, default 256 KiB) — see §17 |
+| Throttle identity | socket peer, or the forwarded address only from a configured trusted proxy — see §17 |
 | Methods | `GET/POST/PATCH/PUT/DELETE` implemented; `OPTIONS` → `204` with `Allow` and **no** CORS headers; `TRACE` → `500` (see §15) |
 
 ## 13. Automated test results
 
 | Suite | Command | Result |
 |---|---|---|
-| Backend (SQLite) | `pytest -q` | **28 passed, 3 skipped** |
-| Backend (PostgreSQL) | `CYBERLAB_TEST_POSTGRES_URL=… pytest -q` | **31 passed** |
+| Backend (SQLite) | `pytest -q` | **32 passed, 3 skipped** |
+| Backend (PostgreSQL) | `CYBERLAB_TEST_POSTGRES_URL=… pytest -q` | **35 passed** |
 | Frontend typecheck | `npm run typecheck` | pass |
 | Frontend lint | `npm run lint` | pass |
-| Frontend unit/component | `npm test` | **47 passed (8 files)** |
+| Frontend unit/component | `npm test` | **54 passed (9 files)** |
 | Frontend build | `npm run build` | pass |
 | Frontend audits | `npm audit`, `npm audit --omit=dev` | 0 / 0 |
 
@@ -248,6 +250,9 @@ New regression coverage added in this milestone:
 - `frontend/__tests__/api-proxy.test.ts` (6 tests) — method/path/query/cookie/`Origin` forwarding, header allow-list, `Set-Cookie` passthrough, traversal rejection, `503` mapping, `204` handling, propagation of upstream `401`.
 - `backend/tests/test_milestone_01d_integration.py` (3 tests) — suspension blocks sessions and sign-in until reactivation; stale step-up blocks privileged mutations while reads stay available and a reauthentication restores them; role switching stays scoped to one session and unassigned roles cannot be activated.
 - `frontend/__tests__/confirm-reason-dialog.test.tsx` (2 tests) — regression for the defect in §14.
+- `backend/tests/test_rate_limit_identity.py` (4 tests) — added after the QA review: unrelated failures cannot block a valid login; repeated failures for one account are still throttled; spoofed `X-Forwarded-For` is ignored from untrusted peers; a trustworthy forwarded address gets an independent bucket (§17).
+- `frontend/__tests__/api-proxy.test.ts` grew to 10 tests — oversized-body rejection (declared and configured limits) and `X-Forwarded-For` forwarding only when explicitly trusted.
+- `frontend/__tests__/token-url-hygiene.test.tsx` (3 tests) — verification and reset tokens are removed from the address bar while remaining usable (§17).
 
 ## 14. Bugs found and fixed
 
@@ -258,7 +263,7 @@ New regression coverage added in this milestone:
 *Test:* `confirm-reason-dialog.test.tsx` fails on the previous code and passes now; browser re-run shows "Approve Instructor Application" during the close frame.
 *Also verified:* after a `403 Recent MFA required`, the step-up modal automatically retries the queued approval and the application ends up approved.
 
-No functional backend or authentication defect was found: every privileged path behaved as documented once exercised through the real UI.
+Within the workflows exercised here no privileged path misbehaved. The independent QA review described in §17 subsequently found a real defect in the login throttles when every browser shares the proxy's address; it is fixed below.
 
 ## 15. Remaining limitations (documented, not fixed)
 
@@ -272,7 +277,8 @@ No functional backend or authentication defect was found: every privileged path 
 8. SMTP delivery was configured but not exercised against a live mail server; the dev capture provider was used.
 9. Browser checks are scripted but not part of CI; the frontend workflow runs typecheck, lint, tests and build only.
 10. Local secrets live in `/tmp/cyberlab-01d.env`; they must not be reused outside this machine.
-11. **Not production ready.** HTTPS/`COOKIE_SECURE=true`, trusted proxies, monitoring, SMTP, and an independent security assessment remain outstanding.
+11. **Trusted-proxy configuration is a deployment step.** Without `TRUSTED_PROXY_IPS` (and `CYBERLAB_TRUST_INBOUND_XFF=true` for the Next.js hop) every browser shares the proxy address for throttling purposes, and one-time mail links still expose the token to the first request's access log.
+12. **Not production ready.** HTTPS/`COOKIE_SECURE=true`, a configured trusted front proxy, monitoring, SMTP, and an independent security assessment remain outstanding.
 
 ## 16. Git
 
@@ -282,7 +288,69 @@ No functional backend or authentication defect was found: every privileged path 
 | Base | `feat/01c1-typography-responsive-ci` @ `9934f02` |
 | Commit — integration tests | `a0e5d23` |
 | Commit — dialog copy fix | `ad31599` |
+| Commit — QA remediation | see `git log` on the branch |
 | Commit — this report | see `git log` on the branch |
 | Pull request | [#7](https://github.com/TechDaDev/cyberlab-academy/pull/7), open, **not merged** |
 | CI | Backend `tests` and frontend `Verify (Node 22)` jobs pass |
 | `main` | untouched |
+
+## 17. Independent QA review findings and remediation
+
+An independent QA pass (local report `docs/CODEX_01D_INDEPENDENT_VERIFICATION_REPORT.md`, not committed) rejected the milestone for acceptance and raised three defects plus one HTTP-hygiene issue. All are addressed below, with reproduction and regression tests.
+
+### 17.1 High — shared proxy address could lock every account out of login (fixed)
+
+*Reproduction:* 40 failed logins for different unknown addresses through the Next.js proxy exhausted a single `login_ip` bucket (the proxy's loopback address), after which a **correct** login for an unrelated account returned `429`.
+
+*Root cause:* the proxy reaches FastAPI from one address, so `request.client.host` was identical for every browser, and the login endpoint consumed the tight IP bucket on *every* attempt, including attempts that were about to fail for unrelated addresses.
+
+*Fix:*
+
+- `backend/app/security.py` resolves the throttle identity through `client_address()`: the socket peer, or the **last** `X-Forwarded-For` hop only when the peer is listed in `TRUSTED_PROXY_IPS`. Client-supplied headers from untrusted peers are ignored, so the address cannot be spoofed into fresh buckets.
+- `backend/app/routes_auth.py` no longer charges the credential throttles before authentication. Only failed attempts consume `login` (address + email, 8/5 min), `login_account` (email, 20/15 min) and `login_global` (5000 failures/5 min site-wide). The pre-auth `login_ip` burst ceiling rose from 40 to 300 attempts/5 min to bound password-hashing cost without being trivially exhausted.
+- Registration and recovery IP ceilings rose from 20 to 60 per hour with 2000-per-hour global safety ceilings.
+- `frontend/app/api/v1/[...path]/route.ts` forwards `X-Forwarded-For` **only** when `CYBERLAB_TRUST_INBOUND_XFF=true`, i.e. only behind a front proxy that appends the real peer. Default is off so the header cannot become a spoofable identity.
+
+*Verification:* live reproduction through the proxy: 45 failures for distinct addresses returned `401` for all 45, and the subsequent valid login for an unrelated account returned `200`. Nine failures against one account still return `401 ×8` then `429`, and the correct password for that account still succeeds. Tests: `backend/tests/test_rate_limit_identity.py` (4 tests).
+
+*Residual risk:* every client sharing one address (NAT, or this local proxy with no trusted front proxy) shares the per-address bucket, by design; it is now only reachable after 300 attempts / 5 minutes and only blocks further *failures* from being reported, while correct credentials still log in. Deployments should terminate TLS at a proxy that appends `X-Forwarded-For` and set `TRUSTED_PROXY_IPS` + `CYBERLAB_TRUST_INBOUND_XFF=true`.
+
+### 17.2 Medium — one-time tokens stayed in the browser URL (fixed)
+
+*Reproduction:* after a successful email verification and after a completed password reset, `location.search` still contained `token=…`; the token pages were also served with the default long-lived cache policy.
+
+*Fix:*
+
+- `frontend/lib/scrub-token-url.ts` and both token views capture the token once into component state and call `history.replaceState` to remove it from the URL and the current history entry before using it.
+- `next.config.mjs` serves `/verify-email` and `/reset-password` with `Cache-Control: no-store, max-age=0` and `Referrer-Policy: no-referrer`; all other routes keep `strict-origin-when-cross-origin`.
+
+*Verification:* browser run — after `Email Address Verified`, `location.href` is `http://localhost:3000/verify-email`; the reset form scrubs before submission and still completes the reset. Header check: both routes return `no-store` + `no-referrer`. Tests: `frontend/__tests__/token-url-hygiene.test.tsx` (3 tests).
+
+*Residual risk:* the initial navigation still carries the token in the query string (by design of mail links), so the first request can appear in infrastructure access logs; a fragment-based link would avoid that and is a candidate follow-up.
+
+### 17.3 Medium — proxy buffered unbounded request bodies (fixed)
+
+*Reproduction:* an 8 MiB body to `POST /api/v1/auth/register` was read and forwarded.
+
+*Fix:* the proxy now rejects oversized bodies with `413 {"detail":"Request body too large","code":"BODY_TOO_LARGE"}` before allocating the string, checking `Content-Length` first and streaming with a byte counter otherwise. The limit defaults to 256 KiB and is configurable with `CYBERLAB_MAX_PROXY_BODY_BYTES`.
+
+*Verification:* 8 MiB body through the proxy returns `413` in ~2 ms without reaching FastAPI. Tests: two additions in `frontend/__tests__/api-proxy.test.ts` (declared length and configured limit).
+
+### 17.4 Low — `TRACE` returns `500` (accepted limitation)
+
+Next.js throws `TypeError: 'TRACE' HTTP method is unsupported` inside `NextRequest` construction before the route handler runs, so the application cannot return `405`. No request headers or body are reflected and FastAPI never sees the call. Recorded with the server log evidence; it requires a fix at the HTTP server/edge layer.
+
+### 17.5 Re-verification after remediation
+
+| Gate | Result |
+|---|---|
+| Backend SQLite | 32 passed, 3 skipped |
+| Backend PostgreSQL 17 | 35 passed |
+| Frontend typecheck / lint | pass |
+| Frontend tests | 54 passed (9 files) |
+| Frontend build | pass |
+| `npm audit` / `--omit=dev` | 0 / 0 |
+| Full four-role browser matrix, 1440×900 and 390×844 | 32 page loads per viewport set: no console errors, no unexpected failed requests, no horizontal overflow, no token query parameters left in the URL |
+| Live QA reproduction through the proxy | 45 unrelated failures → all `401`; unrelated valid login → `200`; same-account `429` after 8 failures; 8 MiB body → `413` |
+
+The full browser matrix from §6 was re-run after these fixes (public pages plus all four dashboards and all four settings pages, at desktop and mobile widths) because the previous pass had only been reproduced partially by QA.

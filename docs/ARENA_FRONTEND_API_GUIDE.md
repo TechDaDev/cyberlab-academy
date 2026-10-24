@@ -33,9 +33,20 @@ Start the API with `python -m app.run`. It binds to `127.0.0.1:8000` by default 
 
 Passwords must be 12–128 characters. They cannot contain the email name or full name. Verification tokens expire after 60 minutes; reset tokens expire after 30 minutes. Both work once, and concurrent submission of the same token allows exactly one success. Only SHA-256 token digests are stored. Forgot-password and registration responses do not reveal whether an address exists.
 
-Abuse controls are per client address and per account. Login allows 8 attempts per address for the same email in 5 minutes, 40 attempts per address, and 20 account-wide attempts in 15 minutes. Registration allows 5 requests per address for the same email and 5 account-wide requests per hour. Verification resend allows 3 requests per address for the same email and 5 account-wide requests per hour. Forgot password allows 3 requests per address for the same email and 5 account-wide requests per hour. A limit returns `429` with a generic `detail`; frontends should back off and must not treat `429` as proof that an account exists.
+Abuse controls combine a trustworthy client address with an account key. Only failed logins consume the credential throttles, so a caller who cannot authenticate cannot lock unrelated accounts out:
 
-Local mail provider `dev_capture` stores private mode-0600 JSON messages in `MAIL_CAPTURE_DIR` (default `/tmp/cyberlab-mail`). No public API reads those files. For delivery, configure `MAIL_PROVIDER=smtp`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `MAIL_FROM`, and `FRONTEND_URL`. Production mode rejects the capture provider. Frontend routes `/verify-email` and `/reset-password` must read the link token and submit it to the corresponding API route.
+- `login` (client address + email): 8 failed attempts per 5 minutes.
+- `login_account` (email only): 20 failed attempts per 15 minutes.
+- `login_ip` (client address): 300 raw attempts per 5 minutes, which bounds password-hashing cost.
+- `login_global`: 5000 failed attempts per 5 minutes site-wide, a safety valve rather than a per-user limit.
+
+Registration allows 5 requests per address for the same email and 5 account-wide requests per hour, plus a 60-per-address and 2000-per-hour global ceiling. Verification resend allows 3 requests per address for the same email and 5 account-wide requests per hour. Forgot password allows 3 requests per address for the same email and 5 account-wide requests per hour, with the same global ceilings as registration. A limit returns `429` with a generic `detail`; frontends should back off and must not treat `429` as proof that an account exists.
+
+The client address is the socket peer unless the API is behind a trusted proxy. Set `TRUSTED_PROXY_IPS` to the proxy addresses (and, for the Next.js proxy, `CYBERLAB_TRUST_INBOUND_XFF=true`) only when that proxy appends the real client address to `X-Forwarded-For`; otherwise a client-supplied header would become a spoofable throttle identity. Without a trusted front proxy every browser shares the Next.js proxy's address, so account-scoped buckets carry the brute-force protection.
+
+Local mail provider `dev_capture` stores private mode-0600 JSON messages in `MAIL_CAPTURE_DIR` (default `/tmp/cyberlab-mail`). No public API reads those files. For delivery, configure `MAIL_PROVIDER=smtp`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `MAIL_FROM`, and `FRONTEND_URL`. Production mode rejects the capture provider. Frontend routes `/verify-email` and `/reset-password` must read the link token and submit it to the corresponding API route, then remove the token from the visible URL and history (`history.replaceState`) as soon as it has been captured. Both routes are served with `Cache-Control: no-store` and `Referrer-Policy: no-referrer`.
+
+The same-origin proxy also refuses request bodies larger than `CYBERLAB_MAX_PROXY_BODY_BYTES` (default 256 KiB) with `413 {"code":"BODY_TOO_LARGE"}` before contacting FastAPI.
 
 ## Authenticated account endpoints
 
