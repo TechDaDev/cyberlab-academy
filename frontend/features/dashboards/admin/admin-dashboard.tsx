@@ -168,7 +168,7 @@ export function AdminDashboard() {
   return (
     <div className="space-y-6">
       {/* Distinct Administrative Control Center Banner */}
-      <div className="rounded-2xl border border-amber-500/40 bg-gradient-to-r from-surface via-slate-900/95 to-amber-950/30 p-6 shadow-cyber-glow">
+      <div className="rounded-2xl border border-amber-500/40 bg-gradient-to-r from-surface via-amber-500/10 to-amber-500/20 dark:via-slate-900/95 dark:to-amber-950/30 p-6 shadow-cyber-glow">
         <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-center">
           <div className="space-y-2">
             <div className="flex flex-wrap items-center gap-2">
@@ -403,9 +403,9 @@ export function AdminDashboard() {
 
       {/* Dedicated Manager & Administrator Role Governance Section */}
       <div id="privileged" className="grid gap-6 lg:grid-cols-12">
-        <Card className="lg:col-span-6">
+        <Card className="min-w-0 lg:col-span-6">
           <CardHeader>
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <CardTitle className="text-base">
                 Manager Role Management ({managers.length})
               </CardTitle>
@@ -427,13 +427,13 @@ export function AdminDashboard() {
               managers.map((mgr) => (
                 <div
                   key={mgr.id}
-                  className="flex items-center justify-between gap-2 rounded-lg border border-border/80 bg-surface-elevated/45 p-3"
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/80 bg-surface-elevated/45 p-3"
                 >
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-foreground truncate">
+                  <div className="min-w-0 flex-1">
+                    <p className="min-w-0 text-sm font-medium text-foreground truncate">
                       {mgr.full_name}
                     </p>
-                    <p className="font-mono text-xs text-muted-foreground truncate">
+                    <p className="min-w-0 font-mono text-xs text-muted-foreground truncate">
                       {mgr.email}
                     </p>
                   </div>
@@ -461,9 +461,9 @@ export function AdminDashboard() {
           </CardContent>
         </Card>
 
-        <Card className="lg:col-span-6">
+        <Card className="min-w-0 lg:col-span-6">
           <CardHeader>
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <CardTitle className="text-base">
                 Administrator Role Management ({administrators.length})
               </CardTitle>
@@ -482,20 +482,20 @@ export function AdminDashboard() {
               return (
                 <div
                   key={adm.id}
-                  className="flex items-center justify-between gap-2 rounded-lg border border-border/80 bg-surface-elevated/45 p-3"
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/80 bg-surface-elevated/45 p-3"
                 >
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <p className="text-sm font-medium text-foreground truncate">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <p className="min-w-0 text-sm font-medium text-foreground truncate">
                         {adm.full_name}
                       </p>
                       {isSoleActive ? (
-                        <Badge variant="warning" className="text-[10px]">
+                        <Badge variant="warning" className="shrink-0 text-[10px]">
                           Last Active Admin
                         </Badge>
                       ) : null}
                     </div>
-                    <p className="font-mono text-xs text-muted-foreground truncate">
+                    <p className="min-w-0 font-mono text-xs text-muted-foreground truncate">
                       {adm.email}
                     </p>
                   </div>

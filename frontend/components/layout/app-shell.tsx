@@ -256,8 +256,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         {/* Main Content Column */}
         <div className="flex flex-1 flex-col min-w-0">
           {/* Top Navigation Bar */}
-          <header className="sticky top-0 z-30 flex h-16 items-center justify-between gap-3 border-b border-border/80 bg-background/85 px-4 backdrop-blur-md sm:px-6">
-            <div className="flex items-center gap-3 min-w-0">
+          <header className="sticky top-0 z-30 flex h-16 items-center justify-between gap-2 border-b border-border/80 bg-background/85 px-4 backdrop-blur-md sm:gap-3 sm:px-6">
+            <div className="flex min-w-0 flex-1 items-center gap-3">
               <Button
                 type="button"
                 variant="ghost"

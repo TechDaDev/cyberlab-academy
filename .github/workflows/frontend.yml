@@ -1,0 +1,91 @@
+name: Frontend CI
+
+# Frontend verification: dependencies, types, lint, tests, production build, and
+# supply-chain audit. Runs independently of the backend workflow.
+on:
+  pull_request:
+    paths:
+      - "frontend/**"
+      - ".github/workflows/frontend.yml"
+  push:
+    branches: [main]
+    paths:
+      - "frontend/**"
+      - ".github/workflows/frontend.yml"
+  workflow_dispatch:
+
+# Least privilege: this workflow only reads the repository. No secrets are
+# referenced, so pull requests from forks run with no credentials at all.
+permissions:
+  contents: read
+
+# Supersede in-flight runs for the same ref rather than burning runner minutes.
+concurrency:
+  group: frontend-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: frontend
+
+env:
+  # Deterministic, non-interactive npm behaviour in CI.
+  CI: true
+  NEXT_TELEMETRY_DISABLED: "1"
+  # The frontend proxies /api/v1 to this origin at request time. No backend is
+  # started in this workflow: every check below is static, unit-level, or a
+  # build-time compilation that never calls the API.
+  CYBERLAB_BACKEND_URL: "http://127.0.0.1:8000"
+
+jobs:
+  verify:
+    name: Verify (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          # Caches ~/.npm keyed on the frontend lockfile.
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies (lockfile-exact)
+        run: npm ci
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit and integration tests
+        run: npm test
+
+      - name: Production build
+        run: npm run build
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev
+
+      - name: Audit all dependencies
+        run: npm audit
+
+      - name: Upload build output on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: next-build-output-node${{ matrix.node }}
+          path: |
+            frontend/.next/build-manifest.json
+            frontend/.next/trace
+          retention-days: 7
+          if-no-files-found: ignore

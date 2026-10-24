@@ -38,12 +38,14 @@ export function CyberLogo({
         </svg>
       </div>
       {!compact ? (
-        <div className="flex flex-col leading-none">
-          <span className="font-display text-sm font-bold tracking-tight text-foreground sm:text-base">
+        <div className="flex min-w-0 flex-col leading-none">
+          <span className="whitespace-nowrap font-display text-sm font-bold tracking-tight text-foreground sm:text-base">
             CyberLab <span className="text-cyan-500 dark:text-cyan-400">Academy</span>
           </span>
           {subtitle ? (
-            <span className="mt-0.5 font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+            // Hidden below `sm`: at phone widths the wordmark itself needs the
+            // space, and the tagline wraps into unreadable 3-line fragments.
+            <span className="mt-1 hidden whitespace-nowrap font-mono text-[10px] uppercase tracking-widest text-muted-foreground sm:block">
               {subtitle}
             </span>
           ) : null}
