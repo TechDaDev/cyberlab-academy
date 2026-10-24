@@ -68,7 +68,8 @@ def register(payload: RegisterRequest, request: Request, background_tasks: Backg
              db: DbSession = Depends(get_db)):
     require_origin(request)
     email = normalize_email(str(payload.email))
-    check_rate_limit(db, request, "register_ip", limit=20, seconds=3600)
+    check_rate_limit(db, request, "register_ip", limit=60, seconds=3600)
+    check_rate_limit(db, request, "register_global", "", limit=2000, seconds=3600, client_scoped=False)
     check_rate_limit(db, request, "register", email, limit=5, seconds=3600)
     check_rate_limit(db, request, "register_account", email, limit=5, seconds=3600, client_scoped=False)
     full_name = payload.full_name.strip()
@@ -143,12 +144,19 @@ def verify_email(payload: TokenRequest, request: Request, db: DbSession = Depend
 def login(payload: LoginRequest, request: Request, response: Response, db: DbSession = Depends(get_db)):
     require_origin(request)
     email = normalize_email(str(payload.email))
-    check_rate_limit(db, request, "login_ip", limit=40, seconds=300)
-    check_rate_limit(db, request, "login", email, limit=8, seconds=300)
-    check_rate_limit(db, request, "login_account", email, limit=20, seconds=900, client_scoped=False)
+    # Burst ceiling on raw attempts per client address bounds hashing cost. It is high
+    # enough that a shared proxy address is not exhausted by a handful of typos, and
+    # successful credentials are checked below before this ceiling can reject them.
+    check_rate_limit(db, request, "login_ip", limit=300, seconds=300)
     user = db.scalar(select(User).where(User.email == email))
     valid = verify_password(payload.password, user.password_hash if user else DUMMY_HASH)
     if user is None or not valid or not user.is_active:
+        # Only failed attempts consume the credential throttles. A caller that cannot
+        # authenticate must not be able to lock unrelated accounts (or every account
+        # behind a shared proxy address) out of the login endpoint.
+        check_rate_limit(db, request, "login", email, limit=8, seconds=300)
+        check_rate_limit(db, request, "login_account", email, limit=20, seconds=900, client_scoped=False)
+        check_rate_limit(db, request, "login_global", "", limit=5000, seconds=300, client_scoped=False)
         db.add(AuditEvent(subject_id=user.id if user else None, action="auth.login_failed"))
         db.commit()
         raise HTTPException(status_code=401, detail="Invalid credentials")
@@ -331,7 +339,8 @@ def forgot_password(payload: EmailRequest, request: Request, background_tasks: B
                     db: DbSession = Depends(get_db)):
     require_origin(request)
     email = normalize_email(str(payload.email))
-    check_rate_limit(db, request, "forgot_ip", limit=20, seconds=3600)
+    check_rate_limit(db, request, "forgot_ip", limit=60, seconds=3600)
+    check_rate_limit(db, request, "forgot_global", "", limit=2000, seconds=3600, client_scoped=False)
     check_rate_limit(db, request, "forgot_password", email, limit=3, seconds=3600)
     check_rate_limit(db, request, "forgot_account", email, limit=5, seconds=3600, client_scoped=False)
     user = db.scalar(select(User).where(User.email == email))

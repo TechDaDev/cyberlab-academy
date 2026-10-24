@@ -71,10 +71,38 @@ def require_origin(request: Request) -> None:
         raise HTTPException(status_code=403, detail="Trusted Origin required")
 
 
+def trusted_proxy_addresses() -> set[str]:
+    """Peers allowed to speak for a downstream client via X-Forwarded-For."""
+    return {
+        entry.strip()
+        for entry in os.getenv("TRUSTED_PROXY_IPS", "").split(",")
+        if entry.strip()
+    }
+
+
+def client_address(request: Request) -> str:
+    """Resolve the throttle identity without trusting client-supplied values.
+
+    A forwarded address is honoured only when the immediate peer is a configured
+    trusted proxy; otherwise the socket peer is the only identity we can trust.
+    When the Next.js proxy is the peer and no trusted front proxy is configured,
+    every browser shares that peer address, so account-scoped buckets remain the
+    primary brute-force control (see docs/MILESTONE_01D_INTEGRATION_REPORT.md).
+    """
+    peer = request.client.host if request.client else "unknown"
+    if peer in trusted_proxy_addresses():
+        forwarded = request.headers.get("x-forwarded-for", "")
+        hops = [hop.strip() for hop in forwarded.split(",") if hop.strip()]
+        if hops:
+            # The nearest proxy appended the last hop; earlier entries are client claims.
+            return hops[-1]
+    return peer
+
+
 def check_rate_limit(db: DbSession, request: Request, action: str, identity: str = "",
                      limit: int = 10, seconds: int = 60, *, client_scoped: bool = True) -> None:
     # Hash the identity and client address so the table does not store either value.
-    client = request.client.host if request.client else "unknown"
+    client = client_address(request)
     subject = f"{client}:{normalize_email(identity)}" if client_scoped else normalize_email(identity)
     key = hashlib.sha256(f"{action}:{subject}".encode()).hexdigest()
     if db.bind is not None and db.bind.dialect.name == "postgresql":
