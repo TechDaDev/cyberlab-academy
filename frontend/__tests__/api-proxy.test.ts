@@ -17,6 +17,7 @@ function jsonResponse(body: unknown, status = 200, headers: Record<string, strin
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 describe("same-origin FastAPI proxy", () => {
@@ -147,5 +148,70 @@ describe("same-origin FastAPI proxy", () => {
     );
     expect(response.status).toBe(401);
     expect(await response.json()).toEqual({ detail: "Authentication required" });
+  });
+});
+
+describe("proxy hardening", () => {
+  function postProbe(body: BodyInit, headers: Record<string, string> = {}) {
+    return new NextRequest("http://localhost:3000/api/v1/auth/register", {
+      method: "POST",
+      headers: { origin: "http://localhost:3000", "content-type": "application/json", ...headers },
+      body,
+    });
+  }
+
+  it("rejects oversized bodies declared by content-length before contacting the backend", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const oversized = "x".repeat(300 * 1024);
+
+    const response = await POST(postProbe(oversized), context("auth", "register"));
+    expect(response.status).toBe(413);
+    expect(await response.json()).toMatchObject({ code: "BODY_TOO_LARGE" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("honours a configured body limit", async () => {
+    vi.stubEnv("CYBERLAB_MAX_PROXY_BODY_BYTES", "32");
+    const fetchMock = vi.fn(async () => jsonResponse({ ok: true }, 202));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const rejected = await POST(postProbe(JSON.stringify({ note: "x".repeat(64) })), context("auth", "register"));
+    expect(rejected.status).toBe(413);
+
+    const accepted = await POST(postProbe(JSON.stringify({ n: 1 })), context("auth", "register"));
+    expect(accepted.status).toBe(202);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps client-controlled X-Forwarded-For out of the trust boundary by default", async () => {
+    const calls: Array<{ init: RequestInit }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        calls.push({ init });
+        return jsonResponse({ ok: true });
+      })
+    );
+
+    await POST(postProbe(JSON.stringify({ a: 1 }), { "x-forwarded-for": "203.0.113.9" }), context("auth", "login"));
+    const forwarded = calls[0].init.headers as Headers;
+    expect(forwarded.get("x-forwarded-for")).toBeNull();
+  });
+
+  it("forwards X-Forwarded-For only when an operator trusts the front proxy", async () => {
+    vi.stubEnv("CYBERLAB_TRUST_INBOUND_XFF", "true");
+    const calls: Array<{ init: RequestInit }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        calls.push({ init });
+        return jsonResponse({ ok: true });
+      })
+    );
+
+    await POST(postProbe(JSON.stringify({ a: 1 }), { "x-forwarded-for": "203.0.113.9" }), context("auth", "login"));
+    const forwarded = calls[0].init.headers as Headers;
+    expect(forwarded.get("x-forwarded-for")).toBe("203.0.113.9");
   });
 });

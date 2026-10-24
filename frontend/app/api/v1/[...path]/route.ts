@@ -3,6 +3,51 @@ import { NextRequest } from "next/server";
 export const dynamic = "force-dynamic";
 
 const DEFAULT_BACKEND_URL = "http://127.0.0.1:8000";
+const DEFAULT_MAX_BODY_BYTES = 256 * 1024;
+
+function maxBodyBytes(): number {
+  const configured = Number(process.env.CYBERLAB_MAX_PROXY_BODY_BYTES);
+  return Number.isFinite(configured) && configured > 0
+    ? configured
+    : DEFAULT_MAX_BODY_BYTES;
+}
+
+function payloadTooLarge(): Response {
+  return Response.json(
+    { detail: "Request body too large", code: "BODY_TOO_LARGE" },
+    { status: 413, headers: { "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } }
+  );
+}
+
+async function readBoundedBody(
+  request: NextRequest,
+  limit: number
+): Promise<string | null> {
+  const declared = Number(request.headers.get("content-length") ?? "");
+  if (Number.isFinite(declared) && declared > limit) return null;
+  if (!request.body) return "";
+
+  const reader = request.body.getReader();
+  const decoder = new TextDecoder();
+  let total = 0;
+  let text = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > limit) {
+        await reader.cancel().catch(() => {});
+        return null;
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return text + decoder.decode();
+}
 
 function resolveBackendBaseUrl(): string {
   const configured = process.env.CYBERLAB_BACKEND_URL?.trim();
@@ -64,10 +109,20 @@ async function proxyToFastApi(
     }
   }
 
+  // Off by default: without a front proxy that appends the real peer, an inbound
+  // X-Forwarded-For is client-controlled and must not become a throttle identity.
+  if (process.env.CYBERLAB_TRUST_INBOUND_XFF === "true") {
+    const forwarded = request.headers.get("x-forwarded-for");
+    if (forwarded) {
+      upstreamHeaders.set("x-forwarded-for", forwarded);
+    }
+  }
+
   const method = request.method.toUpperCase();
   let body: string | undefined;
   if (method !== "GET" && method !== "HEAD") {
-    const rawText = await request.text();
+    const rawText = await readBoundedBody(request, maxBodyBytes());
+    if (rawText === null) return payloadTooLarge();
     if (rawText.length > 0) {
       body = rawText;
     }
