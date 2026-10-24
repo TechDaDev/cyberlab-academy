@@ -1,6 +1,7 @@
 """Manager and administrator account decisions."""
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import func, or_, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DbSession
 
 from .auth_state import AuthContext, authorize, get_auth_context, revoke_user_sessions
@@ -102,13 +103,19 @@ def grant_role(user_id: str, payload: RoleChangeRequest, request: Request,
     require_target_access(context, target, payload.role)
     if payload.role == Role.administrator:
         lock_admin_changes(db)
+    if payload.role in {Role.instructor, Role.manager, Role.administrator} and not target.email_verified:
+        raise HTTPException(status_code=409, detail="Verified email required for privileged role")
     if payload.role in {entry.role for entry in target.roles}:
         raise HTTPException(status_code=409, detail="Role already assigned")
     target.roles.append(UserRole(role=payload.role))
     revoke_user_sessions(db, target.id)
     db.add(AuditEvent(actor_id=context.user.id, subject_id=target.id,
-                      action="role.granted", detail=f"{payload.role.value}: {payload.reason}"))
-    db.commit()
+                      action="role.granted", detail=f"{payload.role.value}: {payload.reason}"[:500]))
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Role already assigned") from exc
     return public_user(target)
 
 
@@ -130,7 +137,7 @@ def revoke_role(user_id: str, role: Role, payload: AccountStatusRequest, request
     target.roles.remove(assigned)
     revoke_user_sessions(db, target.id)
     db.add(AuditEvent(actor_id=context.user.id, subject_id=target.id,
-                      action="role.revoked", detail=f"{role.value}: {payload.reason}"))
+                      action="role.revoked", detail=f"{role.value}: {payload.reason}"[:500]))
     db.commit()
     return public_user(target)
 

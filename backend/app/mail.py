@@ -45,6 +45,8 @@ class SMTPMail:
 def mail_provider() -> MailProvider:
     provider = os.getenv("MAIL_PROVIDER", "dev_capture")
     if provider == "dev_capture":
+        if os.getenv("APP_ENV") == "production":
+            raise RuntimeError("MAIL_PROVIDER=smtp required in production")
         return DevCaptureMail()
     if provider == "smtp":
         return SMTPMail()

@@ -134,6 +134,8 @@ def login(payload: LoginRequest, request: Request, response: Response, db: DbSes
     user = db.scalar(select(User).where(User.email == email))
     valid = verify_password(payload.password, user.password_hash if user else DUMMY_HASH)
     if user is None or not valid or not user.is_active:
+        db.add(AuditEvent(subject_id=user.id if user else None, action="auth.login_failed"))
+        db.commit()
         raise HTTPException(status_code=401, detail="Invalid credentials")
     token = make_session_token()
     session = Session(user_id=user.id, token_digest=digest_token(token),
@@ -152,10 +154,14 @@ def reauthenticate(payload: ReauthenticateRequest, request: Request, response: R
     require_origin(request)
     check_rate_limit(db, request, "reauth", context.user.email, limit=5, seconds=300)
     if not verify_password(payload.password, context.user.password_hash):
+        db.add(AuditEvent(actor_id=context.user.id, action="auth.reauthentication_failed"))
+        db.commit()
         raise HTTPException(status_code=401, detail="Invalid credentials")
     enrollment = db.scalar(select(MFAEnrollment).where(MFAEnrollment.user_id == context.user.id).with_for_update())
     if payload.mfa_code:
         if enrollment is None or not enrollment.enabled or not consume_mfa(db, enrollment, payload.mfa_code):
+            db.add(AuditEvent(actor_id=context.user.id, action="auth.mfa_failed"))
+            db.commit()
             raise HTTPException(status_code=401, detail="Invalid MFA code")
         context.session.mfa_verified_at = now()
     else:

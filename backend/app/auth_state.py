@@ -3,13 +3,17 @@ import os
 from dataclasses import dataclass
 from datetime import timedelta
 
-from fastapi import Depends, HTTPException, Request, Response
+from fastapi import Depends, HTTPException, Request, Response, Security
+from fastapi.security import APIKeyCookie
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session as DbSession
 
 from .database import get_db
 from .models import MFAEnrollment, Role, Session, User
 from .security import SESSION_COOKIE, aware, digest_token, make_session_token, now
+
+cookie_scheme = APIKeyCookie(name=SESSION_COOKIE, auto_error=False,
+                             description="Opaque server-side session cookie; set by login")
 
 
 @dataclass
@@ -18,8 +22,8 @@ class AuthContext:
     session: Session
 
 
-def get_auth_context(request: Request, db: DbSession = Depends(get_db)) -> AuthContext:
-    token = request.cookies.get(SESSION_COOKIE)
+def get_auth_context(request: Request, token: str | None = Security(cookie_scheme),
+                     db: DbSession = Depends(get_db)) -> AuthContext:
     if not token:
         raise HTTPException(status_code=401, detail="Authentication required")
     session = db.scalar(select(Session).where(

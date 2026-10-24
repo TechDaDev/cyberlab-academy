@@ -72,6 +72,9 @@ def admin_ready(c, dbmaker):
 
 def test_postgres_migration_and_independent_sessions(postgres_client, tmp_path):
     c, dbmaker, engine = postgres_client
+    configuration = Config("alembic.ini")
+    command.downgrade(configuration, "0001_accounts")
+    command.upgrade(configuration, "head")
     assert {"users", "user_roles", "sessions", "one_time_tokens", "mfa_enrollments"}.issubset(set(inspect(engine).get_table_names()))
     admin_ready(c, dbmaker)
     assert register(c, "pg-teacher@example.org").status_code == 202

@@ -4,6 +4,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import pyotp
+import pytest
 from fastapi.testclient import TestClient
 
 from app.bootstrap_admin import bootstrap_admin
@@ -124,7 +125,11 @@ def test_independent_sessions_role_revocation_and_suspension(client, tmp_path):
 def test_manager_boundaries_instructor_approval_and_last_admin(client, tmp_path):
     admin, dbmaker = client
     admin_id = admin_ready(admin, dbmaker)
+    with dbmaker() as db, pytest.raises(ValueError, match="already completed"):
+        bootstrap_admin(db, email="another-admin@example.org", full_name="Another Administrator", password=PASSWORD)
     assert admin.post(f"/api/v1/admin/users/{admin_id}/suspend", json={"reason": "Test protection"}).status_code == 409
+    assert admin.request("DELETE", f"/api/v1/admin/users/{admin_id}/roles/administrator",
+        json={"reason":"Test protection"}).status_code == 409
     assert register(admin, "manager@example.org", instructor=True).status_code == 202
     assert verify_email(admin, tmp_path / "mail").status_code == 200
     with dbmaker() as db:
@@ -222,3 +227,68 @@ def test_registration_validation_and_mfa_recovery_code(client):
     assert c.post("/api/v1/auth/active-role", json={"role":"administrator"}).status_code == 200
     assert c.post("/api/v1/auth/reauthenticate", json={"password":PASSWORD,"mfa_code":recovery}).status_code == 401
     assert c.get("/api/v1/admin/users").status_code == 200
+
+
+def test_student_cannot_manage_accounts_and_privileged_grant_needs_verified_email(client):
+    c, dbmaker = client
+    assert register(c, "student-only@example.org").status_code == 202
+    assert login(c, "student-only@example.org").status_code == 200
+    assert c.get("/api/v1/admin/users").status_code == 403
+    assert c.post("/api/v1/admin/instructor-applications/missing/approve",
+        json={"reason":"Forbidden"}).status_code == 403
+    c.post("/api/v1/auth/logout")
+    admin_ready(c, dbmaker)
+    with dbmaker() as db:
+        student = db.query(User).filter_by(email="student-only@example.org").one()
+    assert c.post(f"/api/v1/admin/users/{student.id}/roles",
+        json={"role":"manager", "reason":"Unverified account"}).status_code == 409
+
+
+def test_instructor_rejection_history_and_account_reactivation(client, tmp_path):
+    c, dbmaker = client
+    admin_ready(c, dbmaker)
+    assert register(c, "rejected@example.org", instructor=True).status_code == 202
+    assert verify_email(c, tmp_path / "mail").status_code == 200
+    with dbmaker() as db:
+        applicant = db.query(User).filter_by(email="rejected@example.org").one()
+        application_id = db.query(InstructorRequest).filter_by(user_id=applicant.id).one().id
+        applicant_id = applicant.id
+    rejected = c.post(f"/api/v1/admin/instructor-applications/{application_id}/reject",
+        json={"reason":"Requirements not met"})
+    assert rejected.status_code == 200
+    assert rejected.json()["status"] == "rejected"
+    assert rejected.json()["decided_at"] is not None
+    assert c.post(f"/api/v1/admin/instructor-applications/{application_id}/approve",
+        json={"reason":"Second decision"}).status_code == 409
+    history = c.get("/api/v1/admin/instructor-applications", params={"status":"rejected"})
+    assert history.status_code == 200
+    assert any(item["id"] == application_id for item in history.json())
+    assert c.post(f"/api/v1/admin/users/{applicant_id}/suspend",
+        json={"reason":"Account review"}).status_code == 200
+    with TestClient(app) as applicant_client:
+        applicant_client.headers.update(ORIGIN)
+        assert login(applicant_client, "rejected@example.org").status_code == 401
+        assert c.post(f"/api/v1/admin/users/{applicant_id}/reactivate",
+            json={"reason":"Review completed"}).status_code == 200
+        assert login(applicant_client, "rejected@example.org").status_code == 200
+
+
+def test_manager_mfa_policy_blocks_activation_until_enrollment(client, tmp_path, monkeypatch):
+    admin, dbmaker = client
+    admin_ready(admin, dbmaker)
+    assert register(admin, "mfa-manager@example.org").status_code == 202
+    assert verify_email(admin, tmp_path / "mail").status_code == 200
+    with dbmaker() as db:
+        manager_id = db.query(User).filter_by(email="mfa-manager@example.org").one().id
+    assert admin.post(f"/api/v1/admin/users/{manager_id}/roles",
+        json={"role":"manager", "reason":"Manager appointment"}).status_code == 200
+    monkeypatch.setenv("MANAGER_MFA_REQUIRED", "true")
+    with TestClient(app) as manager:
+        manager.headers.update(ORIGIN)
+        assert login(manager, "mfa-manager@example.org").status_code == 200
+        assert manager.post("/api/v1/auth/active-role", json={"role":"manager"}).status_code == 403
+        enrollment = manager.post("/api/v1/auth/mfa/enroll")
+        assert enrollment.status_code == 200
+        code = pyotp.TOTP(enrollment.json()["secret"]).now()
+        assert manager.post("/api/v1/auth/mfa/confirm", json={"code":code}).status_code == 200
+        assert manager.post("/api/v1/auth/active-role", json={"role":"manager"}).status_code == 200
