@@ -1,46 +1,23 @@
-import os
-from pathlib import Path
-from tempfile import TemporaryDirectory
-
-import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
-
-from app.database import Base, get_db
-from app.main import app
 from app.models import InstructorRequest, User, UserRole, Role
-
-@pytest.fixture
-def client(monkeypatch):
-    monkeypatch.setenv("COOKIE_SECURE", "false")
-    engine = create_engine("sqlite+pysqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
-    Base.metadata.create_all(engine)
-    local = sessionmaker(bind=engine, expire_on_commit=False)
-    def override():
-        with local() as session:
-            yield session
-    app.dependency_overrides[get_db] = override
-    with TestClient(app) as c:
-        yield c, local
-    app.dependency_overrides.clear()
-    engine.dispose()
 
 def signup(c, email="student@example.org", instructor=False):
     return c.post("/api/v1/auth/register", json={
         "full_name": "Test Student",
         "email": email, "password": "very_secure_password_123!",
+        "password_confirmation": "very_secure_password_123!",
         "instructor_application": instructor,
     })
 
 def test_registration_and_duplicate(client):
-    c, _ = client
+    c, dbmaker = client
     response = signup(c)
-    assert response.status_code == 201, response.text
-    assert response.json()["roles"] == ["student"]
-    assert response.json()["email_verified"] is False
-    assert signup(c).status_code == 409
+    assert response.status_code == 202, response.text
+    assert signup(c).status_code == 202
+    with dbmaker() as db:
+        user = db.query(User).filter_by(email="student@example.org").one()
+        assert [role.role for role in user.roles] == [Role.student]
+        assert user.email_verified is False
+        assert db.query(User).count() == 1
 
 def test_login_profile_switch_and_logout(client):
     c, _ = client
@@ -56,10 +33,11 @@ def test_login_profile_switch_and_logout(client):
 def test_instructor_application_does_not_grant_role(client):
     c, dbmaker = client
     response = signup(c, instructor=True)
-    assert response.status_code == 201
-    assert response.json()["roles"] == ["student"]
+    assert response.status_code == 202
     with dbmaker() as db:
-        request = db.query(InstructorRequest).filter_by(user_id=response.json()["id"]).one()
+        user = db.query(User).filter_by(email="student@example.org").one()
+        assert [role.role for role in user.roles] == [Role.student]
+        request = db.query(InstructorRequest).filter_by(user_id=user.id).one()
         assert request.status == "pending"
 
 def test_cross_site_profile_change_blocked(client):
