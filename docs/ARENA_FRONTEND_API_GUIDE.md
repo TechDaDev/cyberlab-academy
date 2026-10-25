@@ -8,7 +8,7 @@ Base path: `/api/v1`. Local API: `http://127.0.0.1:8000`. Send JSON request bodi
 
 Every state-changing request must include an `Origin` accepted by `ALLOWED_ORIGINS`. Browsers send this header automatically. A missing or untrusted Origin returns 403. The session cookie is `Secure` by default. Local HTTP uses `COOKIE_SECURE=false`; production needs HTTPS and `COOKIE_SECURE=true`. Account responses use `Cache-Control: no-store` and `Referrer-Policy: no-referrer`.
 
-Start the API with `python -m app.run`. It binds to `127.0.0.1:8000` by default and ignores proxy headers. Set `TRUSTED_PROXY_IPS` only to addresses of trusted reverse proxies. Set `ALLOWED_HOSTS` to the API hostnames and `ALLOWED_ORIGINS` to exact frontend origins.
+Start the API with `python -m app.run`. It binds to `127.0.0.1:8000` by default and ignores proxy headers unless the peer is listed in `TRUSTED_PROXY_IPS`. Set `TRUSTED_PROXY_IPS` only to addresses of trusted reverse proxies. Set `ALLOWED_HOSTS` to the API hostnames and `ALLOWED_ORIGINS` to exact frontend origins.
 
 ## Authentication state machine
 
@@ -40,9 +40,19 @@ Abuse controls combine a trustworthy client address with an account key. Only fa
 - `login_ip` (client address): 300 raw attempts per 5 minutes, which bounds password-hashing cost.
 - `login_global`: 5000 failed attempts per 5 minutes site-wide, a safety valve rather than a per-user limit.
 
-Registration allows 5 requests per address for the same email and 5 account-wide requests per hour, plus a 60-per-address and 2000-per-hour global ceiling. Verification resend allows 3 requests per address for the same email and 5 account-wide requests per hour. Forgot password allows 3 requests per address for the same email and 5 account-wide requests per hour, with the same global ceilings as registration. A limit returns `429` with a generic `detail`; frontends should back off and must not treat `429` as proof that an account exists.
+Throttling is account-scoped, never keyed on an address that many users share:
 
-The client address is the socket peer unless the API is behind a trusted proxy. Set `TRUSTED_PROXY_IPS` to the proxy addresses (and, for the Next.js proxy, `CYBERLAB_TRUST_INBOUND_XFF=true`) only when that proxy appends the real client address to `X-Forwarded-For`; otherwise a client-supplied header would become a spoofable throttle identity. Without a trusted front proxy every browser shares the Next.js proxy's address, so account-scoped buckets carry the brute-force protection.
+| Endpoint | Buckets |
+|---|---|
+| `POST /auth/login` | failures only: 8 per source+email per 5 min, 20 per email per 15 min, 20 per verified client address per 5 min (trusted proxies only), 5000 failures site-wide per 5 min. Nothing is counted before the credentials are checked, so a correct password always logs in. Excessive concurrent hashing returns `503` with `Retry-After`. |
+| `POST /auth/register` | 5 per source+email per hour, 5 per email per hour, 20 per verified client address per hour (trusted proxies only) |
+| `POST /auth/verification/resend` | 3 per source+email per hour, 5 per email per hour |
+| `POST /auth/forgot-password` | 3 per source+email per hour, 5 per email per hour, 20 per verified client address per hour (trusted proxies only) |
+| `POST /auth/verify-email`, `POST /auth/reset-password` | 10 / 8 submissions per presented token per 5 min |
+
+A limit returns `429` with a generic `detail`; frontends should back off and must not treat `429` as proof that an account exists. A `503` from login means hashing capacity is saturated: retry after the `Retry-After` delay (it is not a credential failure and must not be shown as one).
+
+Address-keyed buckets are enforced only behind a verified trusted-proxy boundary. Set `TRUSTED_PROXY_IPS` to the *immediate peer* addresses that connect to the API (and, for the Next.js proxy, `CYBERLAB_TRUST_INBOUND_XFF=true`) only when that proxy supplies the real client address in `X-Forwarded-For`; the last hop is used so a client-invented prefix is ignored. Client-supplied headers are never trusted on their own. Without a trusted front proxy every browser shares the Next.js proxy's address, so those buckets are skipped entirely and account- and token-scoped buckets carry the abuse protection — no shared address can lock other accounts out.
 
 Local mail provider `dev_capture` stores private mode-0600 JSON messages in `MAIL_CAPTURE_DIR` (default `/tmp/cyberlab-mail`). No public API reads those files. For delivery, configure `MAIL_PROVIDER=smtp`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `MAIL_FROM`, and `FRONTEND_URL`. Production mode rejects the capture provider. Frontend routes `/verify-email` and `/reset-password` must read the link token and submit it to the corresponding API route, then remove the token from the visible URL and history (`history.replaceState`) as soon as it has been captured. Both routes are served with `Cache-Control: no-store` and `Referrer-Policy: no-referrer`.
 

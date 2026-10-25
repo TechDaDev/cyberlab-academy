@@ -128,7 +128,7 @@ A screenshot set was captured for the landing page, all auth pages, and all four
 | `Origin` / CSRF | `POST /auth/login` without `Origin` → 403; with `Origin: https://evil.example` → 403; with `Sec-Fetch-Site: cross-site` → 403 |
 | Session revocation | logout, `logout-all`, password change, password reset, suspension, role grant/revocation and Instructor approval all invalidate affected sessions (verified `401` afterwards) |
 | Session expiry | server-side expiry forced → next protected navigation redirects to `/login?next=…` |
-| Rate limiting | 9th failed login for the same address+email → `429`; 4th `forgot-password` → `429`; registration/verification windows behave likewise |
+| Rate limiting | 9th failed login for the same email → `429`; 4th `forgot-password` → `429`; registration/verification windows behave likewise. No shared-address pre-authentication bucket exists (see §17.1) |
 | Enumeration resistance | duplicate registration returns the same `202` message with no second account and no email; forgot-password identical for known and unknown addresses |
 | Token security | verification/reset tokens are 32-byte URL-safe values, stored only as SHA-256 digests, single use, 60/30-minute expiry; reuse → `400` |
 | Cross-account access | deleting another user's session id → `404`; `GET /admin/users` as Student or Instructor → `403` |
@@ -298,22 +298,23 @@ Within the workflows exercised here no privileged path misbehaved. The independe
 
 An independent QA pass (local report `docs/CODEX_01D_INDEPENDENT_VERIFICATION_REPORT.md`, not committed) rejected the milestone for acceptance and raised three defects plus one HTTP-hygiene issue. All are addressed below, with reproduction and regression tests.
 
-### 17.1 High — shared proxy address could lock every account out of login (fixed)
+### 17.1 High — shared proxy address could lock every account out of login (**superseded by `docs/MILESTONE_01D_RATE_LIMIT_FIX_REPORT.md`**)
 
-*Reproduction:* 40 failed logins for different unknown addresses through the Next.js proxy exhausted a single `login_ip` bucket (the proxy's loopback address), after which a **correct** login for an unrelated account returned `429`.
+*Reproduction (QA, second pass):* 300 failed logins for different unknown addresses through the Next.js proxy exhausted a single `login_ip` bucket (the proxy's loopback address), after which a **correct** login for an unrelated account returned `429` in ≈19 s.
 
-*Root cause:* the proxy reaches FastAPI from one address, so `request.client.host` was identical for every browser, and the login endpoint consumed the tight IP bucket on *every* attempt, including attempts that were about to fail for unrelated addresses.
+*Root cause:* the proxy reaches FastAPI from one address, so `request.client.host` was identical for every browser, and login consumed a **counted** bucket keyed on that address *before* credentials were checked. Any unauthenticated caller could therefore deny login to every account behind the proxy. Raising the ceiling (40 → 300 in the first remediation pass) only moved the constant; the shared, pre-authentication placement of the control was the defect.
 
-*Fix:*
+*Final fix* (`docs/MILESTONE_01D_RATE_LIMIT_FIX_REPORT.md`, commit `811cc7f`):
 
-- `backend/app/security.py` resolves the throttle identity through `client_address()`: the socket peer, or the **last** `X-Forwarded-For` hop only when the peer is listed in `TRUSTED_PROXY_IPS`. Client-supplied headers from untrusted peers are ignored, so the address cannot be spoofed into fresh buckets.
-- `backend/app/routes_auth.py` no longer charges the credential throttles before authentication. Only failed attempts consume `login` (address + email, 8/5 min), `login_account` (email, 20/15 min) and `login_global` (5000 failures/5 min site-wide). The pre-auth `login_ip` burst ceiling rose from 40 to 300 attempts/5 min to bound password-hashing cost without being trivially exhausted.
-- Registration and recovery IP ceilings rose from 20 to 60 per hour with 2000-per-hour global safety ceilings.
-- `frontend/app/api/v1/[...path]/route.ts` forwards `X-Forwarded-For` **only** when `CYBERLAB_TRUST_INBOUND_XFF=true`, i.e. only behind a front proxy that appends the real peer. Default is off so the header cannot become a spoofable identity.
+- Login performs **no counted pre-authentication check**. Only failed attempts charge credential throttles: `login` (client identity + email, 8/5 min), `login_account` (email, 20/15 min), `login_ip_failures` (verified client address only, 20/5 min) and `login_global` (5000 failures/5 min). A correct credential is never rejected by any of them.
+- Password-hashing cost is bounded by **concurrency admission control** (`AUTH_HASH_CONCURRENCY`, `AUTH_HASH_QUEUE_SECONDS`; `503` + `Retry-After` when saturated) instead of a counted lockout window, so back-pressure cannot pin a block on a shared address.
+- `security.trusted_client_address()` returns a forwarded address only when the immediate peer is in `TRUSTED_PROXY_IPS` **and** supplied the header; address-keyed buckets (`register_ip`, `forgot_ip`, `login_ip_failures`) are enforced only inside that verified boundary, so they cannot exist as shared lockout vectors. Bucket keys prefer the verified address when one exists.
+- `register_global` and `forgot_global` were removed; `verify-email` and `reset-password` limits are keyed on `sha256(token)` rather than the caller address.
+- `frontend/app/api/v1/[...path]/route.ts` forwards `X-Forwarded-For` **only** when `CYBERLAB_TRUST_INBOUND_XFF=true`. Default is off so the header cannot become a spoofable identity.
 
-*Verification:* live reproduction through the proxy: 45 failures for distinct addresses returned `401` for all 45, and the subsequent valid login for an unrelated account returned `200`. Nine failures against one account still return `401 ×8` then `429`, and the correct password for that account still succeeds. Tests: `backend/tests/test_rate_limit_identity.py` (4 tests).
+*Verification:* live reproduction through the proxy at the **real** threshold — 300 failures for distinct unknown addresses returned `401` for all 300 (18.3 s), and the subsequent valid login for a verified account returned `200`, issued a working session, and logged out cleanly. Eight failures against one account still give `401 ×8` then `429` while the correct password succeeds. Forged `X-Forwarded-For` neither evaded throttling nor created a shared lockout. 80 forgot-password and 40 registration requests from one address left legitimate recovery and registration working. Tests: `backend/tests/test_rate_limit_identity.py` (7) and `backend/tests/test_postgres_integration.py` (+2, PostgreSQL concurrency at the real ceiling).
 
-*Residual risk:* every client sharing one address (NAT, or this local proxy with no trusted front proxy) shares the per-address bucket, by design; it is now only reachable after 300 attempts / 5 minutes and only blocks further *failures* from being reported, while correct credentials still log in. Deployments should terminate TLS at a proxy that appends `X-Forwarded-For` and set `TRUSTED_PROXY_IPS` + `CYBERLAB_TRUST_INBOUND_XFF=true`.
+*Residual risk:* account-scoped lockout (5–15 min for one email) is intentional; hashing back-pressure can still yield transient `503` under a sustained high-concurrency flood, which must be handled at the edge in a real deployment. Trust assumptions and deployment requirements are documented in the fix report.
 
 ### 17.2 Medium — one-time tokens stayed in the browser URL (fixed)
 
@@ -344,13 +345,13 @@ Next.js throws `TypeError: 'TRACE' HTTP method is unsupported` inside `NextReque
 
 | Gate | Result |
 |---|---|
-| Backend SQLite | 32 passed, 3 skipped |
-| Backend PostgreSQL 17 | 35 passed |
+| Backend SQLite | 35 passed, 5 skipped |
+| Backend PostgreSQL 17 | 40 passed |
 | Frontend typecheck / lint | pass |
 | Frontend tests | 54 passed (9 files) |
 | Frontend build | pass |
 | `npm audit` / `--omit=dev` | 0 / 0 |
 | Full four-role browser matrix, 1440×900 and 390×844 | 32 page loads per viewport set: no console errors, no unexpected failed requests, no horizontal overflow, no token query parameters left in the URL |
-| Live QA reproduction through the proxy | 45 unrelated failures → all `401`; unrelated valid login → `200`; same-account `429` after 8 failures; 8 MiB body → `413` |
+| Live QA reproduction through the proxy | 300 unrelated failures → all `401`; unrelated valid login → `200` with a working session; same-account `429` after 8 failures with the correct password still `200`; 8 MiB body → `413` |
 
 The full browser matrix from §6 was re-run after these fixes (public pages plus all four dashboards and all four settings pages, at desktop and mobile widths) because the previous pass had only been reproduced partially by QA.
