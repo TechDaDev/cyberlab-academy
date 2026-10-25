@@ -118,3 +118,55 @@ After login or role switch, refresh `/users/me`. On 401, clear frontend session 
 A local operator runs `cd backend && .venv/bin/python -m app.bootstrap_admin --email ... --full-name ...`. The command reads the password twice through a hidden prompt, requires `MFA_ENCRYPTION_KEY`, and refuses repeat bootstrap. The operator then signs in, enrolls and confirms TOTP, and activates Administrator. No public Administrator signup exists.
 
 This contract covers account screens. No class, mission, assessment, or instructor teaching resource API exists yet. Do not invent those routes. SMTP, HTTPS, trusted proxy settings, and independent security review remain deployment work. See [Milestone 01B report](MILESTONE_01B_REPORT.md) for verification evidence.
+
+## Academic catalog (Milestone 02A, API 0.3.0)
+
+All catalog routes live under `/api/v1`, require the session cookie, and return
+`Cache-Control: no-store`.
+
+### Published reads (any authenticated user)
+
+| Route | Returns |
+|---|---|
+| `GET /courses?limit=&offset=` | `PageCourses` — published courses only. `limit` 1–100 (default 30), `offset` ≥ 0. Each item carries `planned_module_count` and `published_module_count` |
+| `GET /courses/{course_id}` | `CoursePublic`, `404` when the course is not published |
+| `GET /courses/{course_id}/modules` | `ModulePublic[]` sorted by `sequence`; published modules of a published course |
+| `GET /modules/{module_id}` | `ModulePublic`, `404` unless the module and its course are published |
+| `GET /modules/{module_id}/lessons` | `LessonSummary[]` — metadata only, **never** `body_markdown` |
+| `GET /lessons/{lesson_id}` | `LessonDetail` with body, objectives and resources — **`403` for students and instructors** in 02A |
+
+`GET /lessons/{id}` is deliberately privileged until Phase 02B: lesson bodies need a cohort
+enrollment (student) or cohort assignment (instructor). Render that `403` as "content unlocks
+with enrollment", not as an error.
+
+### Content management (active Manager or Administrator)
+
+Every mutation needs `Origin` (CSRF) and a session authenticated within the last 5 minutes
+(Administrators also within 5 minutes of MFA), otherwise `403`.
+
+| Route | Purpose |
+|---|---|
+| `GET /admin/courses` | `PageCourses` including drafts, published and archived |
+| `POST /admin/courses` | Create a **draft** course (`201`) |
+| `PATCH /admin/courses/{course_id}` | Edit title/summary/planned count; bumps `content_version` |
+| `POST /admin/courses/{course_id}/publish` | Publish catalog metadata |
+| `POST /admin/courses/{course_id}/modules` | Create a draft module at a `sequence` |
+| `PATCH /admin/modules/{module_id}` | Edit or re-sequence a module |
+| `POST /admin/modules/{module_id}/publish` | Publish a module |
+| `POST /admin/modules/{module_id}/lessons` | Create a draft lesson with objectives/resources |
+| `PATCH /admin/lessons/{lesson_id}` | Edit a lesson; bumps `content_version` |
+| `POST /admin/lessons/{lesson_id}/publish` | Publish a lesson |
+
+### Rules the UI must respect
+
+- Publication is always explicit. There is no field for `status`, `published_at` or an actor
+  id on any request body, and unknown fields are rejected with `422`.
+- A module publishes only when its course is published **and** it has at least one published
+  lesson (`409`). Publish lessons before their module.
+- `sequence` must be within `1..planned_module_count` of the course (`422`), and is unique per
+  course/module (`409`). Duplicate codes, sequences and concurrent races return `409`.
+- The CEH v12 course declares `planned_module_count = 20`; only Module 01 metadata exists.
+  Show "20 planned / N available" from the API and never invent the other 19 modules or any
+  lesson text.
+- `PATCH` bodies accept only the fields being changed (`minProperties: 1`, unknown fields
+  rejected).
