@@ -1,21 +1,26 @@
 from app import run
 
 
-def test_runner_ignores_proxy_headers_by_default(monkeypatch):
-    monkeypatch.delenv("TRUSTED_PROXY_IPS", raising=False)
+def _capture(monkeypatch):
     captured = {}
     monkeypatch.setattr(run.uvicorn, "run", lambda *args, **kwargs: captured.update(kwargs))
+    return captured
+
+
+def test_runner_never_rewrites_the_client_address(monkeypatch):
+    monkeypatch.delenv("TRUSTED_PROXY_IPS", raising=False)
+    captured = _capture(monkeypatch)
     run.main()
     assert captured["host"] == "127.0.0.1"
     assert captured["port"] == 8000
     assert captured["proxy_headers"] is False
-    assert captured["forwarded_allow_ips"] == ""
+    assert captured["forwarded_allow_ips"] is None
 
 
-def test_runner_uses_explicit_trusted_proxy_addresses(monkeypatch):
+def test_runner_keeps_proxy_headers_off_even_with_trusted_proxies(monkeypatch):
+    """Uvicorn must not rewrite scope["client"]; the app authorizes forwarding itself."""
     monkeypatch.setenv("TRUSTED_PROXY_IPS", "127.0.0.1")
-    captured = {}
-    monkeypatch.setattr(run.uvicorn, "run", lambda *args, **kwargs: captured.update(kwargs))
+    captured = _capture(monkeypatch)
     run.main()
-    assert captured["proxy_headers"] is True
-    assert captured["forwarded_allow_ips"] == "127.0.0.1"
+    assert captured["proxy_headers"] is False
+    assert captured["forwarded_allow_ips"] is None

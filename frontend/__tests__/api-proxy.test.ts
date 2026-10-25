@@ -198,10 +198,14 @@ describe("proxy hardening", () => {
     const forwarded = calls[0].init.headers as Headers;
     expect(forwarded.get("x-forwarded-for")).toBeNull();
   });
+});
 
-  it("forwards X-Forwarded-For only when an operator trusts the front proxy", async () => {
-    vi.stubEnv("CYBERLAB_TRUST_INBOUND_XFF", "true");
-    const calls: Array<{ init: RequestInit }> = [];
+describe("trusted ingress identity boundary", () => {
+  const SECRET = "local-ingress-secret-value-01";
+  const calls: Array<{ init: RequestInit }> = [];
+
+  function stubFetch() {
+    calls.length = 0;
     vi.stubGlobal(
       "fetch",
       vi.fn(async (_url: string, init: RequestInit) => {
@@ -209,9 +213,110 @@ describe("proxy hardening", () => {
         return jsonResponse({ ok: true });
       })
     );
+  }
 
-    await POST(postProbe(JSON.stringify({ a: 1 }), { "x-forwarded-for": "203.0.113.9" }), context("auth", "login"));
-    const forwarded = calls[0].init.headers as Headers;
-    expect(forwarded.get("x-forwarded-for")).toBe("203.0.113.9");
+  function postProbe(body: BodyInit, headers: Record<string, string> = {}) {
+    return new NextRequest("http://localhost:3000/api/v1/auth/login", {
+      method: "POST",
+      headers: { origin: "http://localhost:3000", "content-type": "application/json", ...headers },
+      body,
+    });
+  }
+
+  function forwardedHeaders(): Headers {
+    return calls[0].init.headers as Headers;
+  }
+
+  beforeEach(() => {
+    vi.stubEnv("CYBERLAB_TRUSTED_INGRESS_SECRET", SECRET);
+    stubFetch();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it("forwards the ingress-asserted client address when the shared secret matches", async () => {
+    await POST(
+      postProbe(JSON.stringify({ a: 1 }), {
+        "x-forwarded-for": "203.0.113.9",
+        "x-cyberlab-ingress-auth": SECRET,
+      }),
+      context("auth", "login")
+    );
+    expect(forwardedHeaders().get("x-forwarded-for")).toBe("203.0.113.9");
+  });
+
+  it("forwards IPv6 client addresses", async () => {
+    await POST(
+      postProbe(JSON.stringify({ a: 1 }), {
+        "x-forwarded-for": "2001:db8::7",
+        "x-cyberlab-ingress-auth": SECRET,
+      }),
+      context("auth", "login")
+    );
+    expect(forwardedHeaders().get("x-forwarded-for")).toBe("2001:db8::7");
+  });
+
+  it("drops the claimed identity when a direct client omits the ingress secret", async () => {
+    for (const address of ["203.0.113.9", "203.0.113.10", "198.51.100.4"]) {
+      await POST(postProbe(JSON.stringify({ a: 1 }), { "x-forwarded-for": address }), context("auth", "login"));
+    }
+    expect(calls).toHaveLength(3);
+    for (const call of calls) {
+      expect((call.init.headers as Headers).get("x-forwarded-for")).toBeNull();
+    }
+  });
+
+  it("drops the claimed identity when the ingress secret is wrong", async () => {
+    await POST(
+      postProbe(JSON.stringify({ a: 1 }), {
+        "x-forwarded-for": "203.0.113.9",
+        "x-cyberlab-ingress-auth": "not-the-secret-value",
+      }),
+      context("auth", "login")
+    );
+    expect(forwardedHeaders().get("x-forwarded-for")).toBeNull();
+  });
+
+  it("fails closed when no ingress secret is configured", async () => {
+    vi.stubEnv("CYBERLAB_TRUSTED_INGRESS_SECRET", "");
+    await POST(
+      postProbe(JSON.stringify({ a: 1 }), {
+        "x-forwarded-for": "203.0.113.9",
+        "x-cyberlab-ingress-auth": "",
+      }),
+      context("auth", "login")
+    );
+    expect(forwardedHeaders().get("x-forwarded-for")).toBeNull();
+  });
+
+  it("rejects ambiguous or malformed forwarding values even from the ingress", async () => {
+    for (const value of ["203.0.113.9, 198.51.100.4", "203.0.113.9,203.0.113.10", "unknown", "203.0.113.9:443", ""]) {
+      await POST(
+        postProbe(JSON.stringify({ a: 1 }), {
+          "x-forwarded-for": value,
+          "x-cyberlab-ingress-auth": SECRET,
+        }),
+        context("auth", "login")
+      );
+    }
+    for (const call of calls) {
+      expect((call.init.headers as Headers).get("x-forwarded-for")).toBeNull();
+    }
+  });
+
+  it("never forwards the ingress secret upstream", async () => {
+    await POST(
+      postProbe(JSON.stringify({ a: 1 }), {
+        "x-forwarded-for": "203.0.113.9",
+        "x-cyberlab-ingress-auth": SECRET,
+      }),
+      context("auth", "login")
+    );
+    const forwarded = forwardedHeaders();
+    expect(forwarded.get("x-cyberlab-ingress-auth")).toBeNull();
+    expect([...forwarded.keys()].join(",")).not.toContain("ingress");
   });
 });

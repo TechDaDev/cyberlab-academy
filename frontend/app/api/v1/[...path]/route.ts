@@ -1,9 +1,13 @@
+import { createHash, timingSafeEqual } from "node:crypto";
+import { isIP } from "node:net";
 import { NextRequest } from "next/server";
 
 export const dynamic = "force-dynamic";
 
 const DEFAULT_BACKEND_URL = "http://127.0.0.1:8000";
 const DEFAULT_MAX_BODY_BYTES = 256 * 1024;
+const INGRESS_AUTH_HEADER = "x-cyberlab-ingress-auth";
+const MIN_INGRESS_SECRET_LENGTH = 16;
 
 function maxBodyBytes(): number {
   const configured = Number(process.env.CYBERLAB_MAX_PROXY_BODY_BYTES);
@@ -47,6 +51,32 @@ async function readBoundedBody(
     reader.releaseLock();
   }
   return text + decoder.decode();
+}
+
+/**
+ * Client identity claimed by the trusted ingress, or null when this request did not
+ * arrive through one.
+ *
+ * A trusted ingress must be authenticated before its forwarding claim is honoured:
+ * setting an environment variable alone is never enough, otherwise any client that
+ * reaches Next.js directly can invent whatever address it likes. The ingress proves
+ * itself with a shared secret header it overwrites, and overwrites `X-Forwarded-For`
+ * with the socket address it actually saw.
+ */
+function trustedIngressClientAddress(request: NextRequest): string | null {
+  const secret = process.env.CYBERLAB_TRUSTED_INGRESS_SECRET?.trim();
+  if (!secret || secret.length < MIN_INGRESS_SECRET_LENGTH) return null;
+
+  const presented = request.headers.get(INGRESS_AUTH_HEADER)?.trim();
+  if (!presented) return null;
+
+  const digest = (value: string) => createHash("sha256").update(value).digest();
+  if (!timingSafeEqual(digest(presented), digest(secret))) return null;
+
+  const forwarded = request.headers.get("x-forwarded-for")?.trim();
+  if (!forwarded) return null;
+  // The ingress overwrites the header, so a legitimate value is a single IP literal.
+  return isIP(forwarded) === 0 ? null : forwarded;
 }
 
 function resolveBackendBaseUrl(): string {
@@ -109,13 +139,13 @@ async function proxyToFastApi(
     }
   }
 
-  // Off by default: without a front proxy that appends the real peer, an inbound
-  // X-Forwarded-For is client-controlled and must not become a throttle identity.
-  if (process.env.CYBERLAB_TRUST_INBOUND_XFF === "true") {
-    const forwarded = request.headers.get("x-forwarded-for");
-    if (forwarded) {
-      upstreamHeaders.set("x-forwarded-for", forwarded);
-    }
+  // Only an authenticated ingress may set a client identity. Everything else (a direct
+  // client, a spoofed header, a replay without the secret) contributes no forwarding
+  // header at all, so FastAPI treats the caller as unverified rather than as whatever
+  // address it asked to be.
+  const clientAddress = trustedIngressClientAddress(request);
+  if (clientAddress) {
+    upstreamHeaders.set("x-forwarded-for", clientAddress);
   }
 
   const method = request.method.toUpperCase();
