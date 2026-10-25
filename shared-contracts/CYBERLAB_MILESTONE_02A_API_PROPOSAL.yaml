@@ -1,0 +1,1240 @@
+openapi: 3.1.0
+info:
+  title: CyberLab Academy — Milestone 02A Proposed Catalog API ONLY
+  version: 0.3.0-draft
+  description: Design-only additive contract for proposed academic catalog routes. NOT current live API. Existing
+    v0.2.0 account endpoints omitted. Backend-generated shared-contracts/openapi.json takes precedence after implementation.
+servers:
+- url: http://localhost:3000
+  description: Same-origin Next.js local proxy
+security:
+- APIKeyCookie: []
+tags:
+- name: Catalog
+- name: Content management
+paths:
+  /api/v1/courses:
+    get:
+      tags:
+      - Catalog
+      summary: List published course catalog
+      operationId: get_courses
+      responses:
+        '200':
+          description: PageCourses
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PageCourses'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      parameters:
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 30
+      - name: offset
+        in: query
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+      x-authorization: Authenticated; published visibility rules; private lesson details privileged until cohort
+        enrollment exists
+  /api/v1/courses/{course_id}:
+    get:
+      tags:
+      - Catalog
+      summary: Read published course metadata
+      operationId: get_courses_course_id
+      responses:
+        '200':
+          description: CoursePublic
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CoursePublic'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      parameters:
+      - name: course_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      x-authorization: Authenticated; published visibility rules; private lesson details privileged until cohort
+        enrollment exists
+  /api/v1/courses/{course_id}/modules:
+    get:
+      tags:
+      - Catalog
+      summary: List published modules of published course
+      operationId: get_courses_course_id_modules
+      responses:
+        '200':
+          description: ModulePublic
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ModulePublic'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      parameters:
+      - name: course_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      x-authorization: Authenticated; published visibility rules; private lesson details privileged until cohort
+        enrollment exists
+  /api/v1/modules/{module_id}:
+    get:
+      tags:
+      - Catalog
+      summary: Read module metadata
+      operationId: get_modules_module_id
+      responses:
+        '200':
+          description: ModulePublic
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModulePublic'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      parameters:
+      - name: module_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      x-authorization: Authenticated; published visibility rules; private lesson details privileged until cohort
+        enrollment exists
+  /api/v1/modules/{module_id}/lessons:
+    get:
+      tags:
+      - Catalog
+      summary: List lesson summaries; privileged until enrollment exists
+      operationId: get_modules_module_id_lessons
+      responses:
+        '200':
+          description: LessonSummary
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LessonSummary'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      parameters:
+      - name: module_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      x-authorization: Authenticated; published visibility rules; private lesson details privileged until cohort
+        enrollment exists
+  /api/v1/lessons/{lesson_id}:
+    get:
+      tags:
+      - Catalog
+      summary: Read lesson detail; privileged in 02A
+      operationId: get_lessons_lesson_id
+      responses:
+        '200':
+          description: LessonDetail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LessonDetail'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      parameters:
+      - name: lesson_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      x-authorization: Authenticated; published visibility rules; private lesson details privileged until cohort
+        enrollment exists
+  /api/v1/admin/courses:
+    get:
+      tags:
+      - Content management
+      summary: List all courses including drafts
+      operationId: get_admin_courses
+      responses:
+        '200':
+          description: PageCourses
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PageCourses'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      parameters:
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 30
+      - name: offset
+        in: query
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+      x-authorization: Active Manager/Administrator session with recent step-up
+    post:
+      tags:
+      - Content management
+      summary: Create draft course
+      operationId: post_admin_courses
+      responses:
+        '201':
+          description: CoursePublic
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CoursePublic'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CourseCreate'
+      x-authorization: Active Manager/Administrator session with recent step-up
+  /api/v1/admin/courses/{course_id}:
+    patch:
+      tags:
+      - Content management
+      summary: Edit course
+      operationId: patch_admin_courses_course_id
+      responses:
+        '200':
+          description: CoursePublic
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CoursePublic'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CoursePatch'
+      parameters:
+      - name: course_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      x-authorization: Active Manager/Administrator session with recent step-up
+  /api/v1/admin/courses/{course_id}/publish:
+    post:
+      tags:
+      - Content management
+      summary: Publish course catalog metadata
+      operationId: post_admin_courses_course_id_publish
+      responses:
+        '200':
+          description: CoursePublic
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CoursePublic'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      parameters:
+      - name: course_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      x-authorization: Active Manager/Administrator session with recent step-up
+  /api/v1/admin/courses/{course_id}/modules:
+    post:
+      tags:
+      - Content management
+      summary: Create draft module
+      operationId: post_admin_courses_course_id_modules
+      responses:
+        '201':
+          description: ModulePublic
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModulePublic'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ModuleCreate'
+      parameters:
+      - name: course_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      x-authorization: Active Manager/Administrator session with recent step-up
+  /api/v1/admin/modules/{module_id}:
+    patch:
+      tags:
+      - Content management
+      summary: Edit draft module
+      operationId: patch_admin_modules_module_id
+      responses:
+        '200':
+          description: ModulePublic
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModulePublic'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ModulePatch'
+      parameters:
+      - name: module_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      x-authorization: Active Manager/Administrator session with recent step-up
+  /api/v1/admin/modules/{module_id}/publish:
+    post:
+      tags:
+      - Content management
+      summary: Publish module
+      operationId: post_admin_modules_module_id_publish
+      responses:
+        '200':
+          description: ModulePublic
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModulePublic'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      parameters:
+      - name: module_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      x-authorization: Active Manager/Administrator session with recent step-up
+  /api/v1/admin/modules/{module_id}/lessons:
+    post:
+      tags:
+      - Content management
+      summary: Create draft lesson
+      operationId: post_admin_modules_module_id_lessons
+      responses:
+        '201':
+          description: LessonDetail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LessonDetail'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LessonCreate'
+      parameters:
+      - name: module_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      x-authorization: Active Manager/Administrator session with recent step-up
+  /api/v1/admin/lessons/{lesson_id}:
+    patch:
+      tags:
+      - Content management
+      summary: Edit draft lesson
+      operationId: patch_admin_lessons_lesson_id
+      responses:
+        '200':
+          description: LessonDetail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LessonDetail'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LessonPatch'
+      parameters:
+      - name: lesson_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      x-authorization: Active Manager/Administrator session with recent step-up
+  /api/v1/admin/lessons/{lesson_id}/publish:
+    post:
+      tags:
+      - Content management
+      summary: Publish lesson
+      operationId: post_admin_lessons_lesson_id_publish
+      responses:
+        '200':
+          description: LessonDetail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LessonDetail'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      parameters:
+      - name: lesson_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      x-authorization: Active Manager/Administrator session with recent step-up
+components:
+  securitySchemes:
+    APIKeyCookie:
+      type: apiKey
+      in: cookie
+      name: cyberlab_session
+  schemas:
+    CourseCreate:
+      type: object
+      additionalProperties: false
+      required:
+      - code
+      - title
+      - edition
+      - planned_module_count
+      properties:
+        code:
+          type: string
+          minLength: 2
+          maxLength: 40
+          pattern: ^[A-Z0-9-]+$
+        title:
+          type: string
+          minLength: 3
+          maxLength: 160
+        edition:
+          type: string
+          minLength: 1
+          maxLength: 40
+        summary:
+          type: string
+          maxLength: 2000
+          default: ''
+        planned_module_count:
+          type: integer
+          minimum: 1
+          maximum: 1000
+    CoursePatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        title:
+          type: string
+          minLength: 3
+          maxLength: 160
+        summary:
+          type: string
+          maxLength: 2000
+        planned_module_count:
+          type: integer
+          minimum: 1
+          maximum: 1000
+    CoursePublic:
+      type: object
+      required:
+      - id
+      - code
+      - title
+      - edition
+      - status
+      - planned_module_count
+      - published_module_count
+      - content_version
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        code:
+          type: string
+        title:
+          type: string
+        summary:
+          type: string
+        edition:
+          type: string
+        status:
+          type: string
+          enum:
+          - draft
+          - published
+          - archived
+        planned_module_count:
+          type: integer
+          minimum: 1
+        published_module_count:
+          type: integer
+          minimum: 0
+        content_version:
+          type: integer
+          minimum: 1
+        published_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+    ModuleCreate:
+      type: object
+      additionalProperties: false
+      required:
+      - sequence
+      - title
+      properties:
+        sequence:
+          type: integer
+          minimum: 1
+        title:
+          type: string
+          minLength: 3
+          maxLength: 160
+        summary:
+          type: string
+          maxLength: 2000
+          default: ''
+    ModulePatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        sequence:
+          type: integer
+          minimum: 1
+        title:
+          type: string
+          minLength: 3
+          maxLength: 160
+        summary:
+          type: string
+          maxLength: 2000
+    ModulePublic:
+      type: object
+      required:
+      - id
+      - course_id
+      - sequence
+      - title
+      - status
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        course_id:
+          $ref: '#/components/schemas/Id'
+        sequence:
+          type: integer
+        title:
+          type: string
+        summary:
+          type: string
+        status:
+          type: string
+          enum:
+          - draft
+          - published
+          - archived
+        published_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+    ResourceInput:
+      type: object
+      additionalProperties: false
+      required:
+      - title
+      - type
+      properties:
+        title:
+          type: string
+          minLength: 2
+          maxLength: 180
+        type:
+          type: string
+          enum:
+          - external_link
+          - reference
+          - download_reference
+        external_url:
+          type:
+          - string
+          - 'null'
+          format: uri
+        asset_reference:
+          type:
+          - string
+          - 'null'
+          maxLength: 250
+    ObjectivePublic:
+      type: object
+      required:
+      - sequence
+      - text
+      properties:
+        sequence:
+          type: integer
+          minimum: 1
+        text:
+          type: string
+    ResourcePublic:
+      type: object
+      required:
+      - id
+      - sequence
+      - title
+      - type
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        sequence:
+          type: integer
+        title:
+          type: string
+        type:
+          type: string
+          enum:
+          - external_link
+          - reference
+          - download_reference
+        external_url:
+          type:
+          - string
+          - 'null'
+          format: uri
+        asset_reference:
+          type:
+          - string
+          - 'null'
+    LessonCreate:
+      type: object
+      additionalProperties: false
+      required:
+      - sequence
+      - title
+      - body_markdown
+      properties:
+        sequence:
+          type: integer
+          minimum: 1
+        title:
+          type: string
+          minLength: 3
+          maxLength: 160
+        body_markdown:
+          type: string
+          maxLength: 100000
+        objectives:
+          type: array
+          maxItems: 40
+          items:
+            type: string
+            minLength: 2
+            maxLength: 500
+        resources:
+          type: array
+          maxItems: 60
+          items:
+            $ref: '#/components/schemas/ResourceInput'
+    LessonPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        sequence:
+          type: integer
+          minimum: 1
+        title:
+          type: string
+          minLength: 3
+          maxLength: 160
+        body_markdown:
+          type: string
+          maxLength: 100000
+        objectives:
+          type: array
+          maxItems: 40
+          items:
+            type: string
+            minLength: 2
+            maxLength: 500
+        resources:
+          type: array
+          maxItems: 60
+          items:
+            $ref: '#/components/schemas/ResourceInput'
+    LessonSummary:
+      type: object
+      required:
+      - id
+      - module_id
+      - sequence
+      - title
+      - status
+      - content_version
+      properties:
+        id:
+          $ref: '#/components/schemas/Id'
+        module_id:
+          $ref: '#/components/schemas/Id'
+        sequence:
+          type: integer
+        title:
+          type: string
+        status:
+          type: string
+          enum:
+          - draft
+          - published
+          - archived
+        content_version:
+          type: integer
+    LessonDetail:
+      allOf:
+      - $ref: '#/components/schemas/LessonSummary'
+      - type: object
+        required:
+        - body_markdown
+        - objectives
+        - resources
+        properties:
+          body_markdown:
+            type: string
+          objectives:
+            type: array
+            items:
+              $ref: '#/components/schemas/ObjectivePublic'
+          resources:
+            type: array
+            items:
+              $ref: '#/components/schemas/ResourcePublic'
+    PageCourses:
+      type: object
+      required:
+      - items
+      - limit
+      - offset
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CoursePublic'
+        limit:
+          type: integer
+        offset:
+          type: integer
+        total:
+          type: integer
+          minimum: 0
+    Error:
+      type: object
+      properties:
+        detail:
+          oneOf:
+          - type: string
+          - type: array
+            items:
+              type: object
+    Id:
+      type: string
+      format: uuid

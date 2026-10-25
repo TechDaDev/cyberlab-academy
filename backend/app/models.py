@@ -2,7 +2,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, Enum as SQLEnum, ForeignKey, Index, String, UniqueConstraint
+from sqlalchemy import (Boolean, CheckConstraint, DateTime, Enum as SQLEnum, ForeignKey, Index,
+                        Integer, String, Text, UniqueConstraint)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .database import Base
 
@@ -96,3 +97,115 @@ class AuditEvent(Base):
     action: Mapped[str] = mapped_column(String(100))
     detail: Mapped[str] = mapped_column(String(500), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ContentStatus(str, Enum):
+    """Publication lifecycle shared by every catalog record."""
+
+    draft = "draft"
+    published = "published"
+    archived = "archived"
+
+
+class ResourceType(str, Enum):
+    external_link = "external_link"
+    reference = "reference"
+    download_reference = "download_reference"
+
+
+class Course(Base):
+    __tablename__ = "courses"
+    __table_args__ = (
+        CheckConstraint("status IN ('draft', 'published', 'archived')", name="ck_courses_status"),
+        CheckConstraint("planned_module_count > 0", name="ck_courses_planned_count"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    code: Mapped[str] = mapped_column(String(40), unique=True, index=True)
+    title: Mapped[str] = mapped_column(String(160))
+    summary: Mapped[str] = mapped_column(String(2000), default="")
+    edition: Mapped[str] = mapped_column(String(40))
+    planned_module_count: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(20), default=ContentStatus.draft.value, index=True)
+    content_version: Mapped[int] = mapped_column(Integer, default=1)
+    created_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    modules: Mapped[list["CourseModule"]] = relationship(
+        back_populates="course", cascade="all, delete-orphan", order_by="CourseModule.sequence")
+
+
+class CourseModule(Base):
+    __tablename__ = "course_modules"
+    __table_args__ = (
+        UniqueConstraint("course_id", "sequence", name="uq_course_modules_sequence"),
+        CheckConstraint("sequence >= 1", name="ck_course_modules_sequence_positive"),
+        CheckConstraint("status IN ('draft', 'published', 'archived')", name="ck_course_modules_status"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    course_id: Mapped[str] = mapped_column(ForeignKey("courses.id", ondelete="CASCADE"), index=True)
+    sequence: Mapped[int] = mapped_column(Integer)
+    title: Mapped[str] = mapped_column(String(160))
+    summary: Mapped[str] = mapped_column(String(2000), default="")
+    status: Mapped[str] = mapped_column(String(20), default=ContentStatus.draft.value, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    course: Mapped[Course] = relationship(back_populates="modules")
+    lessons: Mapped[list["ModuleLesson"]] = relationship(
+        back_populates="module", cascade="all, delete-orphan", order_by="ModuleLesson.sequence")
+
+
+class ModuleLesson(Base):
+    __tablename__ = "module_lessons"
+    __table_args__ = (
+        UniqueConstraint("module_id", "sequence", name="uq_module_lessons_sequence"),
+        CheckConstraint("sequence >= 1", name="ck_module_lessons_sequence_positive"),
+        CheckConstraint("status IN ('draft', 'published', 'archived')", name="ck_module_lessons_status"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    module_id: Mapped[str] = mapped_column(ForeignKey("course_modules.id", ondelete="CASCADE"), index=True)
+    sequence: Mapped[int] = mapped_column(Integer)
+    title: Mapped[str] = mapped_column(String(160))
+    body_markdown: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(20), default=ContentStatus.draft.value, index=True)
+    content_version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    module: Mapped[CourseModule] = relationship(back_populates="lessons")
+    objectives: Mapped[list["LessonObjective"]] = relationship(
+        back_populates="lesson", cascade="all, delete-orphan", order_by="LessonObjective.sequence")
+    resources: Mapped[list["LearningResource"]] = relationship(
+        back_populates="lesson", cascade="all, delete-orphan", order_by="LearningResource.sequence")
+
+
+class LessonObjective(Base):
+    __tablename__ = "lesson_objectives"
+    __table_args__ = (
+        UniqueConstraint("lesson_id", "sequence", name="uq_lesson_objectives_sequence"),
+        CheckConstraint("sequence >= 1", name="ck_lesson_objectives_sequence_positive"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    lesson_id: Mapped[str] = mapped_column(ForeignKey("module_lessons.id", ondelete="CASCADE"), index=True)
+    sequence: Mapped[int] = mapped_column(Integer)
+    text: Mapped[str] = mapped_column(String(500))
+    lesson: Mapped[ModuleLesson] = relationship(back_populates="objectives")
+
+
+class LearningResource(Base):
+    __tablename__ = "learning_resources"
+    __table_args__ = (
+        UniqueConstraint("lesson_id", "sequence", name="uq_learning_resources_sequence"),
+        CheckConstraint("sequence >= 1", name="ck_learning_resources_sequence_positive"),
+        CheckConstraint("type IN ('external_link', 'reference', 'download_reference')",
+                        name="ck_learning_resources_type"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    lesson_id: Mapped[str] = mapped_column(ForeignKey("module_lessons.id", ondelete="CASCADE"), index=True)
+    sequence: Mapped[int] = mapped_column(Integer)
+    title: Mapped[str] = mapped_column(String(180))
+    type: Mapped[str] = mapped_column(String(24))
+    external_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    asset_reference: Mapped[str | None] = mapped_column(String(250), nullable=True)
+    lesson: Mapped[ModuleLesson] = relationship(back_populates="resources")
