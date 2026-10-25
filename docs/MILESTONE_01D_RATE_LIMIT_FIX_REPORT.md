@@ -116,8 +116,9 @@ keyed on an identity that unrelated users share and that an attacker can fill.
 - No new global pre-authentication ceiling that could recreate the same lockout exists on
   login. `login_global` is a post-verification failure counter: exhausting it only changes
   the status of *failing* attempts from `401` to `429`.
-- No `X-Forwarded-For` trust was enabled. `CYBERLAB_TRUST_INBOUND_XFF` remains `false` by
-  default and `TRUSTED_PROXY_IPS` remains empty in the local environment.
+- No `X-Forwarded-For` trust was enabled: `TRUSTED_PROXY_IPS` remains empty in the local
+  environment, and the Next.js hop forwards a client identity only for an authenticated
+  sanitising ingress (see [MILESTONE_01D_PROXY_TRUST_FIX_REPORT.md](MILESTONE_01D_PROXY_TRUST_FIX_REPORT.md)).
 
 ## 4. Files changed
 
@@ -154,14 +155,22 @@ and timestamp; the change is which keys are used.
   account-scoped and token-scoped counters apply, plus transient hashing back-pressure.
   This is the state the local integration environment runs in (`TRUSTED_PROXY_IPS=`).
 - **Behind a verified front proxy.** Set `TRUSTED_PROXY_IPS` to the *immediate peer*
-  address(es) only, i.e. the proxy that connects to the API. That proxy must overwrite —
-  not append to — the client-supplied header, or must itself be the last appender. The
-  value used is the last hop, so an attacker-supplied prefix is ignored.
+  address(es) only, i.e. the proxy that connects to the API. That proxy must overwrite the
+  client-supplied header. Only a single valid IP literal is accepted; multi-hop chains are
+  discarded rather than resolved, because at least one writer in such a chain is
+  untrusted.
 - **Next.js proxy.** `frontend/app/api/v1/[...path]/route.ts` forwards `X-Forwarded-For`
-  only when `CYBERLAB_TRUST_INBOUND_XFF=true`. With `next start` (no front proxy) the
-  request has no `X-Forwarded-For`, so even if FastAPI were misconfigured to trust
-  `127.0.0.1`, no address would be accepted (`trusted_client_address()` returns `None`
-  when the trusted peer supplies no header).
+  only for a request that authenticates as the sanitising ingress
+  (`X-Cyberlab-Ingress-Auth` matching `CYBERLAB_TRUSTED_INGRESS_SECRET`, constant time,
+  single IP literal).
+
+> **Corrected after independent review.** The version of this section originally published
+> here described the resolver as working behind any trusted proxy and gated the Next.js hop
+> on a boolean flag. Both statements were wrong in a real deployment: Uvicorn rewrote
+> `scope["client"]` so the peer check never matched (no address bucket was ever created),
+> and the flag let a direct client forge the header. The server no longer rewrites the peer,
+> and trust now requires proof from the ingress. See
+> [MILESTONE_01D_PROXY_TRUST_FIX_REPORT.md](MILESTONE_01D_PROXY_TRUST_FIX_REPORT.md).
 - **Residual capacity risk.** Concurrency admission control protects CPU, not bandwidth or
   availability of the host itself. A sustained high-concurrency flood can still produce
   transient `503`s for legitimate users; that is expected back-pressure and should be
@@ -194,7 +203,7 @@ second account, and mail delivery remains off the response path.
 | D — session security | `test_successful_login_still_issues_and_revokes_sessions`: cookie set, `/users/me` `200`, logout `204`, `/users/me` `401` |
 | E — related endpoints | `test_shared_address_cannot_block_recovery_or_registration`: 80 forgot-password requests for unknown addresses then a real recovery still succeeds and sends exactly one mail; 30 registrations then a legitimate one is persisted |
 | Audit / monitoring | `test_failed_login_attempts_still_audit`: `auth.login_failed` audit row and `login` rate-limit rows exist, and no `login_ip` bucket is written |
-| Trusted proxy | `test_forwarded_addresses_get_independent_buckets_behind_a_trusted_proxy`: with `TRUSTED_PROXY_IPS` set, one forwarded address exhausting its bucket does not affect another forwarded address |
+| Trusted proxy | `test_forwarded_addresses_get_independent_buckets_behind_a_trusted_proxy`: with `TRUSTED_PROXY_IPS` set, one forwarded address exhausting its bucket does not affect another forwarded address. Superseded in strength by the real-Uvicorn suite in [MILESTONE_01D_PROXY_TRUST_FIX_REPORT.md](MILESTONE_01D_PROXY_TRUST_FIX_REPORT.md), which runs the actual server stack |
 
 `backend/tests/test_postgres_integration.py` (+2):
 
@@ -281,3 +290,10 @@ backend test and by the live reproduction below.
 | Push status | pushed to `origin/codex/milestone-01d-integration` (PR #7 left open, not merged) |
 | `main` | not modified |
 | `docs/CODEX_01D_INDEPENDENT_VERIFICATION_REPORT.md` | left untracked and unmodified |
+
+## 14. Follow-up remediation
+
+The trusted-proxy boundary described in §6 was subsequently found to be broken in a real
+Uvicorn deployment and was corrected, including the Next.js ingress authentication.
+See [MILESTONE_01D_PROXY_TRUST_FIX_REPORT.md](MILESTONE_01D_PROXY_TRUST_FIX_REPORT.md) for
+the architecture, tests, and verified results.

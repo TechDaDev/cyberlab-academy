@@ -8,7 +8,7 @@ Base path: `/api/v1`. Local API: `http://127.0.0.1:8000`. Send JSON request bodi
 
 Every state-changing request must include an `Origin` accepted by `ALLOWED_ORIGINS`. Browsers send this header automatically. A missing or untrusted Origin returns 403. The session cookie is `Secure` by default. Local HTTP uses `COOKIE_SECURE=false`; production needs HTTPS and `COOKIE_SECURE=true`. Account responses use `Cache-Control: no-store` and `Referrer-Policy: no-referrer`.
 
-Start the API with `python -m app.run`. It binds to `127.0.0.1:8000` by default and ignores proxy headers unless the peer is listed in `TRUSTED_PROXY_IPS`. Set `TRUSTED_PROXY_IPS` only to addresses of trusted reverse proxies. Set `ALLOWED_HOSTS` to the API hostnames and `ALLOWED_ORIGINS` to exact frontend origins.
+Start the API with `python -m app.run`. It binds to `127.0.0.1:8000` by default, never lets Uvicorn rewrite the client address, and resolves `X-Forwarded-For` itself (see "Who resolves the client address" below). Set `ALLOWED_HOSTS` to the API hostnames and `ALLOWED_ORIGINS` to exact frontend origins.
 
 ## Authentication state machine
 
@@ -33,14 +33,7 @@ Start the API with `python -m app.run`. It binds to `127.0.0.1:8000` by default 
 
 Passwords must be 12–128 characters. They cannot contain the email name or full name. Verification tokens expire after 60 minutes; reset tokens expire after 30 minutes. Both work once, and concurrent submission of the same token allows exactly one success. Only SHA-256 token digests are stored. Forgot-password and registration responses do not reveal whether an address exists.
 
-Abuse controls combine a trustworthy client address with an account key. Only failed logins consume the credential throttles, so a caller who cannot authenticate cannot lock unrelated accounts out:
-
-- `login` (client address + email): 8 failed attempts per 5 minutes.
-- `login_account` (email only): 20 failed attempts per 15 minutes.
-- `login_ip` (client address): 300 raw attempts per 5 minutes, which bounds password-hashing cost.
-- `login_global`: 5000 failed attempts per 5 minutes site-wide, a safety valve rather than a per-user limit.
-
-Throttling is account-scoped, never keyed on an address that many users share:
+Abuse controls combine a trustworthy client identity with an account key. Only failed logins consume the credential throttles, so a caller who cannot authenticate cannot lock unrelated accounts out. There is **no counted pre-authentication bucket** on login.
 
 | Endpoint | Buckets |
 |---|---|
@@ -52,7 +45,24 @@ Throttling is account-scoped, never keyed on an address that many users share:
 
 A limit returns `429` with a generic `detail`; frontends should back off and must not treat `429` as proof that an account exists. A `503` from login means hashing capacity is saturated: retry after the `Retry-After` delay (it is not a credential failure and must not be shown as one).
 
-Address-keyed buckets are enforced only behind a verified trusted-proxy boundary. Set `TRUSTED_PROXY_IPS` to the *immediate peer* addresses that connect to the API (and, for the Next.js proxy, `CYBERLAB_TRUST_INBOUND_XFF=true`) only when that proxy supplies the real client address in `X-Forwarded-For`; the last hop is used so a client-invented prefix is ignored. Client-supplied headers are never trusted on their own. Without a trusted front proxy every browser shares the Next.js proxy's address, so those buckets are skipped entirely and account- and token-scoped buckets carry the abuse protection — no shared address can lock other accounts out.
+### Who resolves the client address
+
+Exactly one component resolves a client identity: `app.security.trusted_client_address()`. Uvicorn's own proxy handling is **disabled** (`app.run` passes `proxy_headers=False`, `forwarded_allow_ips=None`), so `request.client` is always the real socket peer and the application can check it. `TRUSTED_PROXY_IPS` lists *immediate peers* that are allowed to speak for a downstream client.
+
+Acceptance rules, all enforced in the application:
+
+1. The immediate socket peer must be listed in `TRUSTED_PROXY_IPS`; otherwise no client identity exists.
+2. `X-Forwarded-For` must contain **exactly one** address (the trusted ingress overwrites it). Multiple hops mean at least one untrusted writer, so the whole value is discarded rather than guessing a hop.
+3. The value must be a valid IPv4/IPv6 literal (bracketed IPv6 allowed; ports, hostnames, zone ids and lists rejected) and is canonicalised, so `::1`, `0:0:0:0:0:0:0:1` and `[::1]` are one identity and `::ffff:203.0.113.9` collapses to `203.0.113.9`.
+4. Forwarding headers from an unlisted peer are stripped by `UntrustedForwardingGuard` before routing, so no other code can read a client-asserted address.
+
+When no identity resolves, address-keyed buckets (`login_ip_failures`, `register_ip`, `forgot_ip`) are **skipped** rather than keyed on the shared peer address: that is a deliberate fail-safe, because a bucket keyed on infrastructure shared by many users is the lockout vector this design removes. Account- and token-scoped buckets keep working, so the endpoints remain protected and available.
+
+**Deploying an ingress.** Forwarded identity is only produced when the ingress is authenticated. The Next.js proxy forwards `X-Forwarded-For` solely when the request also carries `X-Cyberlab-Ingress-Auth` matching `CYBERLAB_TRUSTED_INGRESS_SECRET` (constant-time compare, minimum 16 characters). The ingress must **overwrite** both headers, never append, and the secret must stay outside version control. Without the secret — or with a direct connection to Next.js, a guessed secret, a multi-address value, or a spoofed header — no forwarding header reaches FastAPI, so a client cannot invent a new identity and cannot reset its own throttle bucket.
+
+Chain: `client → sanitising ingress (overwrites X-Forwarded-For, adds secret) → Next.js /api/v1 proxy (verifies secret, strips otherwise) → FastAPI (verifies immediate peer, parses one address) → PostgreSQL counters`.
+
+Local note: `next start` does not add `X-Forwarded-For`, and `COOKIE_SECURE=false` means plain HTTP. That is acceptable only for loopback development; deployed traffic needs HTTPS, `COOKIE_SECURE=true`, and a network boundary that stops clients from reaching Next.js or the API directly, bypassing the ingress.
 
 Local mail provider `dev_capture` stores private mode-0600 JSON messages in `MAIL_CAPTURE_DIR` (default `/tmp/cyberlab-mail`). No public API reads those files. For delivery, configure `MAIL_PROVIDER=smtp`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `MAIL_FROM`, and `FRONTEND_URL`. Production mode rejects the capture provider. Frontend routes `/verify-email` and `/reset-password` must read the link token and submit it to the corresponding API route, then remove the token from the visible URL and history (`history.replaceState`) as soon as it has been captured. Both routes are served with `Cache-Control: no-store` and `Referrer-Policy: no-referrer`.
 
