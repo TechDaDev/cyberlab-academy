@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from .routes_auth import router as accounts_router
 
 app = FastAPI(
     title="CyberLab Academy API",
@@ -6,8 +7,8 @@ app = FastAPI(
     description="Mission-based cybersecurity learning platform",
 )
 
+app.include_router(accounts_router)
 
 @app.get("/api/v1/health", tags=["system"])
 def health() -> dict[str, str]:
-    """Unauthenticated liveness probe. No internal diagnostics."""
     return {"status": "ok"}
