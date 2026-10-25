@@ -250,6 +250,30 @@ def list_all_courses(limit: int = Query(30, ge=1, le=100), offset: int = Query(0
                        limit=limit, offset=offset, total=total)
 
 
+@router.get("/admin/courses/{course_id}", response_model=CoursePublic,
+            tags=["Content management"])
+def read_admin_course(course_id: str, context: AuthContext = Depends(get_auth_context),
+                      db: DbSession = Depends(get_db)):
+    """Any course by id, whatever its publication status, for content management."""
+    authorize(context, CONTENT_MANAGERS)
+    course = get_course(db, course_id)
+    published = published_module_counts(db, [course.id]).get(course.id, 0)
+    return course_public(course, published)
+
+
+@router.get("/admin/courses/{course_id}/modules", response_model=list[ModulePublic],
+            tags=["Content management"])
+def list_admin_modules(course_id: str, context: AuthContext = Depends(get_auth_context),
+                      db: DbSession = Depends(get_db)):
+    """Every module of the course, including drafts, so authors can resume editing."""
+    authorize(context, CONTENT_MANAGERS)
+    course = get_course(db, course_id)
+    modules = db.scalars(select(CourseModule)
+                         .where(CourseModule.course_id == course.id)
+                         .order_by(CourseModule.sequence)).all()
+    return [module_public(module) for module in modules]
+
+
 @router.post("/admin/courses", response_model=CoursePublic, status_code=201,
              tags=["Content management"])
 def create_course(payload: CourseCreate, request: Request,

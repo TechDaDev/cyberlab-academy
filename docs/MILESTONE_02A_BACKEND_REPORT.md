@@ -18,7 +18,7 @@ Independent verification is Codex's responsibility. Nothing here claims producti
 | Models | `backend/app/models.py` — `Course`, `CourseModule`, `ModuleLesson`, `LessonObjective`, `LearningResource`, `ContentStatus`, `ResourceType` |
 | Migration | `backend/alembic/versions/0003_academic_catalog.py` (`0002_account_security` → `0003_academic_catalog`, with downgrade) |
 | Schemas | `backend/app/schemas_catalog.py` |
-| Routes | `backend/app/routes_catalog.py` (15 endpoints) |
+| Routes | `backend/app/routes_catalog.py` (17 operations over 15 path templates) |
 | Seed | `backend/app/seed_catalog.py` (`python -m app.seed_catalog`) |
 | Contract exporter | `backend/scripts/export_openapi.py` |
 | Contract | `shared-contracts/openapi.json` — API 0.3.0, 42 paths |
@@ -40,11 +40,13 @@ All under `/api/v1`, cookie-authenticated, `Cache-Control: no-store`.
 | GET | `/modules/{module_id}/lessons` | `LessonSummary[]` — metadata only, body never included |
 | GET | `/lessons/{lesson_id}` | `LessonDetail` (body, objectives, resources) — content managers only in 02A |
 
-### Content management (active Manager or Administrator, `Origin` + recent step-up)
+### Content management (active Manager or Administrator; reads need no step-up, mutations do)
 
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/admin/courses` | all statuses, including drafts |
+| GET | `/admin/courses/{course_id}` | `CoursePublic` for any status; `404` when missing |
+| GET | `/admin/courses/{course_id}/modules` | all modules of the course (draft, published, archived), ordered by `sequence`; `[]` when empty |
 | POST | `/admin/courses` | `201`, always creates a draft |
 | PATCH | `/admin/courses/{course_id}` | title/summary/planned count; bumps `content_version` |
 | POST | `/admin/courses/{course_id}/publish` | draft → published |
@@ -110,10 +112,10 @@ Commands run from `backend/` with `.venv`:
 
 | Command | Result |
 |---|---|
-| `pytest -q tests/test_milestone_02a_catalog.py` | **11 passed** |
+| `pytest -q tests/test_milestone_02a_catalog.py` | **13 passed** |
 | `pytest -q tests/test_postgres_catalog.py` (with `CYBERLAB_TEST_POSTGRES_URL`) | **3 passed** |
-| `pytest -q` (SQLite) | **82 passed, 8 skipped** |
-| `pytest -q` (PostgreSQL 17) | **90 passed** |
+| `pytest -q` (SQLite) | **84 passed, 8 skipped** |
+| `pytest -q` (PostgreSQL 17) | **92 passed** |
 | `alembic upgrade head` / `downgrade 0002_account_security` / `upgrade head` (SQLite) | clean round trip |
 | `pytest` migration round trip on PostgreSQL (test 1 above) | clean, account tables untouched |
 
@@ -132,6 +134,10 @@ Coverage of the requested areas:
 - unauthorized access: anonymous `401`, student/instructor `403`, bad `Origin` `403`, stale
   step-up `403` (reads still allowed)
 - migration upgrade/downgrade on SQLite **and** PostgreSQL
+- content-manager draft navigation: draft course detail, draft module listing (ordering, empty
+  course, missing `404`), same data after a reload with the session cookie on a fresh client,
+  Administrator parity, student/instructor `403`, anonymous `401`, and public endpoints still
+  hiding the same draft
 - OpenAPI parity: committed `shared-contracts/openapi.json` == `app.openapi()`
 - seed idempotency (twice) and "no invented content" assertions
 - pagination bounds (`limit` > 100 → `422`, negative offset → `422`) and totals
@@ -155,7 +161,10 @@ the run. Results:
 ## 7. Contract
 
 - `shared-contracts/openapi.json` regenerated via `python scripts/export_openapi.py`; info version
-  `0.3.0`, 42 paths (27 pre-existing + 15 new), 16 new schemas.
+  `0.3.0`, 42 paths (27 pre-existing + 15 new), 16 new schemas. A follow-up correction added the
+  `GET` operations on `/admin/courses/{course_id}` and `/admin/courses/{course_id}/modules`
+  (**+2 operations, 0 path or schema changes**), so draft content can be rediscovered after a
+  reload without widening public visibility.
 - Verified additive: **0 changed** pre-existing paths, **0 changed** pre-existing schemas, no
   removed paths. The frontend can adopt the new endpoints without touching existing calls.
 
@@ -166,9 +175,11 @@ the run. Results:
 2. **`GET /lessons/{id}` returns `403` for students and instructors** in 02A. The proposal said
    "privileged until 02B"; enrollment-based learner access and cohort instructor access need the
    02B tables, so the body stays content-manager–only.
-3. **`GET /admin/courses` requires the Manager/Administrator role but not fresh step-up.** Step-up
-   guards the 9 mutations; a read-only draft listing stays available to a stale session, matching
-   the existing `/admin/users` behaviour verified in 01D.
+3. **The three `GET /admin/...` routes require the Manager/Administrator role but not fresh
+   step-up.** Step-up guards the 9 mutations; read-only draft navigation stays available to a stale
+   session, matching the existing `/admin/users` behaviour verified in 01D. The proposal listed
+   step-up for `GET /admin/courses`; keeping reads unstepped is deliberate so an authoring session
+   can recover a draft after an idle period.
 4. **`planned_module_count` is `NOT NULL` with `> 0`.** The architecture allowed it to be nullable;
    the API requires it on create and never clears it, so nullable would have been unreachable.
 5. **Resources have no independent `status`.** They inherit the lesson lifecycle; a resource-level
@@ -195,19 +206,21 @@ Patch models additionally require at least one field.
 
 1. **Lesson bodies are unreachable for learners until 02B.** Students see catalog metadata and
    lesson titles only; that is intentional, not a defect.
-2. **No archive/delete endpoints.** The proposal allowed archive "only if useful in 02A"; it is
+2. **Draft navigation is role-scoped only.** There is no per-author ownership: any Manager or
+   Administrator can open any course draft. Acceptable while the catalog is global curriculum.
+3. **No archive/delete endpoints.** The proposal allowed archive "only if useful in 02A"; it is
    deferred, so records cannot be removed through the API at all (only status changes via publish).
-3. **No resource/objective PATCH verbs.** Objectives and resources are replaced wholesale with the
+4. **No resource/objective PATCH verbs.** Objectives and resources are replaced wholesale with the
    lesson patch, which keeps ordering deterministic and avoids per-row endpoints.
-4. **`planned_module_count` may exceed the modules that exist.** By design for CEH v12 (20 planned,
+5. **`planned_module_count` may exceed the modules that exist.** By design for CEH v12 (20 planned,
    1 available); the UI must present the difference honestly.
-5. **Archived status is storable but not reachable** through the API yet; queried catalog reads
-   exclude it via the published filter.
-6. **No rate limiting on catalog mutations.** They are privileged, step-up gated and audited;
+6. **Archived status is storable but not reachable** through the API yet; the admin listing shows it
+   if a record ever carries it, while public reads exclude it via the published filter.
+7. **No rate limiting on catalog mutations.** They are privileged, step-up gated and audited;
    adding per-actor throttles is a later hardening item.
-7. **Search/sorting are minimal** (courses by `code`, modules/lessons by `sequence`). Server-driven
+8. **Search/sorting are minimal** (courses by `code`, modules/lessons by `sequence`). Server-driven
    sorting parameters were not requested for 02A.
-8. **Frontend, cohorts, enrollment, progress and grading are out of scope** and not implemented.
+9. **Frontend, cohorts, enrollment, progress and grading are out of scope** and not implemented.
 
 ## 10. Pull request
 

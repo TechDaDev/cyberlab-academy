@@ -371,6 +371,80 @@ def test_seed_is_idempotent_and_never_invents_curriculum(client):
     assert course_only.modules_created == []
 
 
+def test_content_managers_can_rediscover_draft_content(client, tmp_path):
+    admin, dbmaker = client
+    admin_ready(admin, dbmaker)
+    mail_dir = tmp_path / "mail"
+    course = create_course(admin, code="DRAFT-01", title="Draft navigation course")
+    first = create_module(admin, course["id"], sequence=3, title="Third positioned module")
+    second = create_module(admin, course["id"], sequence=1, title="First positioned module")
+
+    manager = make_manager(admin, dbmaker, mail_dir)
+    # Same session, after a reload-style follow-up request.
+    detail = manager.get(f"/api/v1/admin/courses/{course['id']}")
+    assert detail.status_code == 200
+    assert detail.json()["status"] == "draft"
+    assert detail.json()["id"] == course["id"]
+    assert detail.json()["published_module_count"] == 0
+
+    modules = manager.get(f"/api/v1/admin/courses/{course['id']}/modules")
+    assert modules.status_code == 200
+    assert [(item["sequence"], item["status"]) for item in modules.json()] == [
+        (1, "draft"), (3, "draft")]
+    assert {item["id"] for item in modules.json()} == {first["id"], second["id"]}
+
+    # A brand-new client with the same session cookie (application reload) sees them too.
+    with TestClient(app) as reloaded:
+        reloaded.headers.update(ORIGIN)
+        reloaded.cookies.set("cyberlab_session", manager.cookies.get("cyberlab_session"))
+        assert reloaded.get(f"/api/v1/admin/courses/{course['id']}").status_code == 200
+        again = reloaded.get(f"/api/v1/admin/courses/{course['id']}/modules").json()
+        assert [item["sequence"] for item in again] == [1, 3]
+
+    # Administrator has the same access, including archived/published states.
+    assert publish(admin, f"/admin/courses/{course['id']}/publish").status_code == 200
+    published_view = admin.get(f"/api/v1/admin/courses/{course['id']}")
+    assert published_view.status_code == 200
+    assert published_view.json()["status"] == "published"
+    assert len(admin.get(f"/api/v1/admin/courses/{course['id']}/modules").json()) == 2
+
+    # Empty course yields an empty array, not an error.
+    empty = create_course(admin, code="EMPTY-01", title="Course without modules")
+    assert admin.get(f"/api/v1/admin/courses/{empty['id']}/modules").json() == []
+
+    # Missing records are 404 for authorized callers too.
+    missing = "/api/v1/admin/courses/00000000-0000-0000-0000-000000000000"
+    assert manager.get(missing).status_code == 404
+    assert manager.get(f"{missing}/modules").status_code == 404
+
+
+def test_admin_draft_navigation_is_role_restricted(client, tmp_path):
+    admin, dbmaker = client
+    admin_ready(admin, dbmaker)
+    mail_dir = tmp_path / "mail"
+    course = create_course(admin, code="SECRET-01", title="Draft only course")
+    create_module(admin, course["id"], sequence=1, title="Draft only module")
+    paths = (f"/api/v1/admin/courses/{course['id']}",
+             f"/api/v1/admin/courses/{course['id']}/modules")
+
+    with TestClient(app) as anonymous:
+        anonymous.headers.update(ORIGIN)
+        for path in paths:
+            assert anonymous.get(path).status_code == 401
+
+    student = make_student(admin, dbmaker, mail_dir)
+    instructor = make_student(admin, dbmaker, mail_dir, email="scope-instructor@example.org",
+                              instructor=True)
+    for client_under_test in (student, instructor):
+        for path in paths:
+            assert client_under_test.get(path).status_code == 403
+
+    # Public catalog endpoints stay publication-filtered for those same roles.
+    assert student.get(f"/api/v1/courses/{course['id']}").status_code == 404
+    assert student.get(f"/api/v1/courses/{course['id']}/modules").status_code == 404
+    assert student.get("/api/v1/courses").json()["items"] == []
+
+
 def test_openapi_contract_matches_the_running_application():
     committed = json.loads(CONTRACT.read_text())
     assert committed == app.openapi()
@@ -382,6 +456,14 @@ def test_openapi_contract_matches_the_running_application():
                                          "/api/v1/admin/lessons/"))}
     assert len(catalog_paths) == 15
     assert committed["info"]["version"] == "0.3.0"
+    admin_course = committed["paths"]["/api/v1/admin/courses/{course_id}"]
+    assert set(admin_course) == {"get", "patch"}
+    assert admin_course["get"]["responses"]["200"]["content"]["application/json"]["schema"][
+        "$ref"].endswith("/CoursePublic")
+    admin_modules = committed["paths"]["/api/v1/admin/courses/{course_id}/modules"]
+    assert set(admin_modules) == {"get", "post"}
+    assert admin_modules["get"]["responses"]["200"]["content"]["application/json"]["schema"][
+        "type"] == "array"
     for path in catalog_paths:
         for operation in committed["paths"][path].values():
             assert operation["tags"][0] in {"Catalog", "Content management"}

@@ -142,11 +142,17 @@ with enrollment", not as an error.
 ### Content management (active Manager or Administrator)
 
 Every mutation needs `Origin` (CSRF) and a session authenticated within the last 5 minutes
-(Administrators also within 5 minutes of MFA), otherwise `403`.
+(Administrators also within 5 minutes of MFA), otherwise `403`. The three `GET` routes above are
+read-only: they need the active Manager/Administrator role but **not** fresh step-up, so authoring
+screens keep working after an idle period. Use them to rebuild a content-management view
+(`GET /admin/courses` → `GET /admin/courses/{id}` → `GET /admin/courses/{id}/modules` →
+`GET /modules/{id}/lessons`); never fall back to the public endpoints, which hide drafts by design.
 
 | Route | Purpose |
 |---|---|
 | `GET /admin/courses` | `PageCourses` including drafts, published and archived |
+| `GET /admin/courses/{course_id}` | `CoursePublic` for any course whatever its status — use after a reload to re-open a draft |
+| `GET /admin/courses/{course_id}/modules` | `ModulePublic[]` — **all** modules including drafts and archived, sorted by `sequence`; `[]` when the course has none |
 | `POST /admin/courses` | Create a **draft** course (`201`) |
 | `PATCH /admin/courses/{course_id}` | Edit title/summary/planned count; bumps `content_version` |
 | `POST /admin/courses/{course_id}/publish` | Publish catalog metadata |
