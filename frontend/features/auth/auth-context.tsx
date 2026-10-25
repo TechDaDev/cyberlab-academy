@@ -27,6 +27,8 @@ export interface StepUpPromptState {
   targetRole?: Role;
   contextDescription?: string;
   onSuccessCallback?: () => Promise<void> | void;
+  /** Invoked only when the prompt is dismissed without successful verification. */
+  onCancelCallback?: () => void;
 }
 
 export interface AuthContextValue {
@@ -51,6 +53,7 @@ export interface AuthContextValue {
     targetRole?: Role;
     contextDescription?: string;
     onSuccess?: () => Promise<void> | void;
+    onCancel?: () => void;
   }) => void;
   closeStepUp: () => void;
 }
@@ -208,6 +211,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       targetRole?: Role;
       contextDescription?: string;
       onSuccess?: () => Promise<void> | void;
+      onCancel?: () => void;
     }) => {
       setStepUpState({
         open: true,
@@ -215,6 +219,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         targetRole: params.targetRole,
         contextDescription: params.contextDescription,
         onSuccessCallback: params.onSuccess,
+        onCancelCallback: params.onCancel,
       });
     },
     []

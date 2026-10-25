@@ -45,13 +45,25 @@ export function ReauthModal() {
       user?.active_role === "administrator"
   );
 
-  const resetAndClose = () => {
+  /**
+   * Closes the prompt and resets its form.
+   *
+   * `cancelled` distinguishes "the operator dismissed the prompt" from "the
+   * credential was verified and the caller's follow-up action is about to run".
+   * Only the former notifies `onCancelCallback`, so a successful verification is
+   * never reported to the initiating flow as a cancellation.
+   */
+  const resetAndClose = (options?: { cancelled?: boolean }) => {
     setPassword("");
     setMfaCode("");
     setShowPassword(false);
     setErrorMessage(null);
     setIsSubmitting(false);
+    const onCancel = options?.cancelled
+      ? stepUpState?.onCancelCallback
+      : undefined;
     closeStepUp();
+    onCancel?.();
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -131,7 +143,10 @@ export function ReauthModal() {
   };
 
   return (
-    <Dialog open={isOpen} onOpenChange={(next) => !next && resetAndClose()}>
+    <Dialog
+      open={isOpen}
+      onOpenChange={(next) => !next && resetAndClose({ cancelled: true })}
+    >
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
@@ -163,7 +178,7 @@ export function ReauthModal() {
                   Need to enroll TOTP first?{" "}
                   <Link
                     href="/settings/mfa"
-                    onClick={() => closeStepUp()}
+                    onClick={() => resetAndClose({ cancelled: true })}
                     className="font-medium text-cyan-400 underline underline-offset-4"
                   >
                     Open MFA Enrollment
@@ -237,7 +252,7 @@ export function ReauthModal() {
               type="button"
               variant="outline"
               disabled={isSubmitting}
-              onClick={resetAndClose}
+              onClick={() => resetAndClose({ cancelled: true })}
             >
               Cancel
             </Button>

@@ -3,7 +3,9 @@ import {
   GraduationCap,
   KeyRound,
   LayoutDashboard,
+  Library,
   LockKeyhole,
+  PencilRuler,
   Settings,
   Shield,
   ShieldCheck,
@@ -204,8 +206,81 @@ export function getNavigationForRole(activeRole: Role): NavSection[] {
     },
   };
 
+
+  const academicsPrimary: Record<Role, NavSection> = {
+    student: {
+      heading: "Academic Catalog",
+      items: [
+        {
+          label: "Course Catalog",
+          href: "/academics",
+          icon: Library,
+          description: "Published CEH curriculum",
+        },
+        {
+          label: "Available Modules",
+          href: "/academics#available-modules",
+          icon: BookOpen,
+          description: "Published modules only",
+        },
+      ],
+    },
+    instructor: {
+      heading: "Academic Catalog",
+      items: [
+        {
+          label: "Course Catalog",
+          href: "/academics",
+          icon: Library,
+          description: "Published CEH curriculum",
+        },
+        {
+          label: "Curriculum Explorer",
+          href: "/academics#available-modules",
+          icon: BookOpen,
+          description: "Module and lesson sequencing",
+        },
+      ],
+    },
+    manager: {
+      heading: "Academic Catalog",
+      items: [
+        {
+          label: "Course Catalog",
+          href: "/academics",
+          icon: Library,
+          description: "Published CEH curriculum",
+        },
+        {
+          label: "Content Management",
+          href: "/academics/manage",
+          icon: PencilRuler,
+          description: "Draft courses, modules and lessons",
+        },
+      ],
+    },
+    administrator: {
+      heading: "Academic Catalog",
+      items: [
+        {
+          label: "Course Catalog",
+          href: "/academics",
+          icon: Library,
+          description: "Published CEH curriculum",
+        },
+        {
+          label: "Academic Administration",
+          href: "/academics/manage",
+          icon: PencilRuler,
+          description: "Curriculum lifecycle control",
+        },
+      ],
+    },
+  };
+
   return [
     rolePrimary[activeRole],
+    academicsPrimary[activeRole],
     {
       heading: "Account & Security",
       items: [
