@@ -112,6 +112,54 @@ def test_postgres_concurrent_verification_token_is_single_use(postgres_client, t
     assert sorted(statuses) == [200, 400]
 
 
+def test_postgres_concurrent_failed_logins_respect_account_limit(postgres_client, tmp_path, monkeypatch):
+    c, dbmaker, engine = postgres_client
+    from app import routes_auth
+    monkeypatch.setattr(routes_auth, "verify_password_guarded",
+                        lambda password, password_hash: password_hash == f"plain:{password}")
+    monkeypatch.setattr(routes_auth, "hash_password_guarded", lambda password: f"plain:{password}")
+    assert register(c, "race-login@example.org").status_code == 202
+    assert c.post("/api/v1/auth/verify-email", json={"token": latest_token(tmp_path / "mail")}).status_code == 200
+
+    attempts = 24
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = [
+            executor.submit(lambda index=index: TestClient(app).post(
+                "/api/v1/auth/login",
+                json={"email": "race-login@example.org", "password": "Wrong-Password-2026!"},
+                headers=ORIGIN,
+            ).status_code)
+            for index in range(attempts)
+        ]
+        statuses = [future.result() for future in futures]
+    assert not [status for status in statuses if status >= 500]
+    assert statuses.count(401) <= 8
+    assert statuses.count(429) >= attempts - 8
+
+    with TestClient(app) as owner:
+        owner.headers.update(ORIGIN)
+        assert login(owner, "race-login@example.org").status_code == 200
+
+
+def test_postgres_shared_address_spray_cannot_block_a_valid_login(postgres_client, tmp_path, monkeypatch):
+    c, dbmaker, engine = postgres_client
+    from app import routes_auth
+    monkeypatch.setattr(routes_auth, "verify_password_guarded",
+                        lambda password, password_hash: password_hash == f"plain:{password}")
+    monkeypatch.setattr(routes_auth, "hash_password_guarded", lambda password: f"plain:{password}")
+    assert register(c, "pg-threshold@example.org").status_code == 202
+    assert c.post("/api/v1/auth/verify-email", json={"token": latest_token(tmp_path / "mail")}).status_code == 200
+
+    with TestClient(app) as attacker:
+        attacker.headers.update(ORIGIN)
+        statuses = {attacker.post("/api/v1/auth/login",
+                                  json={"email": f"pg-unknown{index}@example.org", "password": "Wrong-Password-2026!"}
+                                  ).status_code for index in range(300)}
+        assert statuses == {401}
+        assert login(attacker, "pg-threshold@example.org").status_code == 200
+        assert attacker.get("/api/v1/users/me").status_code == 200
+
+
 def test_postgres_concurrent_last_admin_protection(postgres_client, tmp_path):
     first, dbmaker, engine = postgres_client
     first_id = admin_ready(first, dbmaker)

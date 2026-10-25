@@ -22,6 +22,7 @@ import {
   type EmailOnlyFormValues,
 } from "@/features/auth/schemas";
 import { ROLE_METADATA } from "@/features/roles/role-metadata";
+import { scrubOneTimeTokenFromUrl } from "@/lib/scrub-token-url";
 import { useAuth } from "@/hooks/use-auth";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -69,7 +70,13 @@ export function VerifyEmailView() {
   const searchParams = useSearchParams();
   const { user, isAuthenticated, refreshUser } = useAuth();
 
-  const rawToken = searchParams?.get("token")?.trim() ?? "";
+  // Capture the link token once, then strip it from the address bar. The component keeps
+  // using the captured value, so scrubbing cannot interrupt the single-use submission.
+  const [rawToken] = React.useState(() => searchParams?.get("token")?.trim() ?? "");
+  React.useEffect(() => {
+    if (rawToken) scrubOneTimeTokenFromUrl();
+  }, [rawToken]);
+
   const isTokenStructurallyValid =
     rawToken.length >= 20 && rawToken.length <= 200;
 

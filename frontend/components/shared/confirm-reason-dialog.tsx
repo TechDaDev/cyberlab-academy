@@ -47,6 +47,26 @@ export function ConfirmReasonDialog({
   const [reason, setReason] = React.useState("");
   const [validationError, setValidationError] = React.useState<string | null>(null);
 
+  // Callers derive the copy from a nullable "pending action" state that is cleared the
+  // moment the mutation resolves. The dialog stays mounted while it animates out, so
+  // without this snapshot the closing dialog would flip to the fallback wording.
+  const [openCopy, setOpenCopy] = React.useState({
+    title,
+    description,
+    confirmLabel,
+    variant,
+  });
+  if (
+    open &&
+    (openCopy.title !== title ||
+      openCopy.description !== description ||
+      openCopy.confirmLabel !== confirmLabel ||
+      openCopy.variant !== variant)
+  ) {
+    setOpenCopy({ title, description, confirmLabel, variant });
+  }
+  const copy = open ? { title, description, confirmLabel, variant } : openCopy;
+
   const handleDialogOpenChange = (nextOpen: boolean) => {
     if (!nextOpen) {
       setReason("");
@@ -79,14 +99,14 @@ export function ConfirmReasonDialog({
           <DialogTitle className="flex items-center gap-2">
             <ShieldAlert
               className={
-                variant === "destructive"
+                copy.variant === "destructive"
                   ? "h-5 w-5 text-red-400"
                   : "h-5 w-5 text-cyan-400"
               }
             />
-            <span>{title}</span>
+            <span>{copy.title}</span>
           </DialogTitle>
-          <DialogDescription>{description}</DialogDescription>
+          <DialogDescription>{copy.description}</DialogDescription>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -141,7 +161,7 @@ export function ConfirmReasonDialog({
             </Button>
             <Button
               type="submit"
-              variant={variant === "destructive" ? "destructive" : "default"}
+              variant={copy.variant === "destructive" ? "destructive" : "default"}
               disabled={isSubmitting}
             >
               {isSubmitting ? (
@@ -150,7 +170,7 @@ export function ConfirmReasonDialog({
                   <span>Processing...</span>
                 </>
               ) : (
-                confirmLabel
+                copy.confirmLabel
               )}
             </Button>
           </DialogFooter>
