@@ -20,8 +20,9 @@ from .schemas import (ChangeEmailRequest, ChangePasswordRequest, EmailRequest, L
                       TokenRequest, UserPublic)
 from .security import (SESSION_COOKIE, aware, check_rate_limit, consume_mfa, decrypt_secret,
                        digest_token, encrypt_secret, expires_at, hash_password,
-                       make_session_token, normalize_email, now, recovery_digest,
-                       require_origin, require_strong_password, verify_password, verify_totp)
+                       hash_password_guarded, make_session_token, normalize_email, now,
+                       recovery_digest, require_origin, require_strong_password, verify_password,
+                       verify_password_guarded, verify_totp)
 
 router = APIRouter(prefix="/api/v1", tags=["accounts"])
 DUMMY_HASH = hash_password("Dummy-only-password-2026!")
@@ -68,8 +69,7 @@ def register(payload: RegisterRequest, request: Request, background_tasks: Backg
              db: DbSession = Depends(get_db)):
     require_origin(request)
     email = normalize_email(str(payload.email))
-    check_rate_limit(db, request, "register_ip", limit=60, seconds=3600)
-    check_rate_limit(db, request, "register_global", "", limit=2000, seconds=3600, client_scoped=False)
+    check_rate_limit(db, request, "register_ip", limit=20, seconds=3600, trusted_client_only=True)
     check_rate_limit(db, request, "register", email, limit=5, seconds=3600)
     check_rate_limit(db, request, "register_account", email, limit=5, seconds=3600, client_scoped=False)
     full_name = payload.full_name.strip()
@@ -77,7 +77,7 @@ def register(payload: RegisterRequest, request: Request, background_tasks: Backg
         raise HTTPException(status_code=422, detail="Full name must contain at least 2 characters")
     require_strong_password(payload.password, email=email, full_name=full_name)
     if db.scalar(select(User.id).where(User.email == email)) is None:
-        user = User(full_name=full_name, email=email, password_hash=hash_password(payload.password))
+        user = User(full_name=full_name, email=email, password_hash=hash_password_guarded(payload.password))
         user.roles.append(UserRole(role=Role.student))
         db.add(user)
         try:
@@ -94,7 +94,7 @@ def register(payload: RegisterRequest, request: Request, background_tasks: Backg
         background_tasks.add_task(send_link, email, "verify_email", token)
     else:
         # Keep response shape and hashing cost similar for an existing account.
-        hash_password(payload.password)
+        hash_password_guarded(payload.password)
     return Message(message="If eligible, check your email for verification")
 
 
@@ -117,7 +117,8 @@ def resend_verification(payload: EmailRequest, request: Request, background_task
 @router.post("/auth/verify-email", response_model=Message)
 def verify_email(payload: TokenRequest, request: Request, db: DbSession = Depends(get_db)):
     require_origin(request)
-    check_rate_limit(db, request, "verify_token", limit=10, seconds=300)
+    check_rate_limit(db, request, "verify_token", digest_token(payload.token),
+                     limit=10, seconds=300, client_scoped=False)
     record = valid_token(db, payload.token, ("verify_email", "change_email"))
     user = db.get(User, record.user_id)
     if user is None:
@@ -144,18 +145,19 @@ def verify_email(payload: TokenRequest, request: Request, db: DbSession = Depend
 def login(payload: LoginRequest, request: Request, response: Response, db: DbSession = Depends(get_db)):
     require_origin(request)
     email = normalize_email(str(payload.email))
-    # Burst ceiling on raw attempts per client address bounds hashing cost. It is high
-    # enough that a shared proxy address is not exhausted by a handful of typos, and
-    # successful credentials are checked below before this ceiling can reject them.
-    check_rate_limit(db, request, "login_ip", limit=300, seconds=300)
+    # No pre-authentication bucket gates this endpoint: every identity it could key on is
+    # either shared with unrelated users (an unverified proxy address) or client-invented.
+    # Credential-abuse throttles are charged on failures below, and hashing cost is
+    # bounded by concurrency admission control instead of a counted lockout window.
     user = db.scalar(select(User).where(User.email == email))
-    valid = verify_password(payload.password, user.password_hash if user else DUMMY_HASH)
+    valid = verify_password_guarded(payload.password, user.password_hash if user else DUMMY_HASH)
     if user is None or not valid or not user.is_active:
-        # Only failed attempts consume the credential throttles. A caller that cannot
-        # authenticate must not be able to lock unrelated accounts (or every account
-        # behind a shared proxy address) out of the login endpoint.
+        # Only failed attempts consume the credential throttles, so a caller who cannot
+        # authenticate can never lock unrelated accounts out of the login endpoint.
         check_rate_limit(db, request, "login", email, limit=8, seconds=300)
         check_rate_limit(db, request, "login_account", email, limit=20, seconds=900, client_scoped=False)
+        check_rate_limit(db, request, "login_ip_failures", "", limit=20, seconds=300,
+                         trusted_client_only=True)
         check_rate_limit(db, request, "login_global", "", limit=5000, seconds=300, client_scoped=False)
         db.add(AuditEvent(subject_id=user.id if user else None, action="auth.login_failed"))
         db.commit()
@@ -339,8 +341,7 @@ def forgot_password(payload: EmailRequest, request: Request, background_tasks: B
                     db: DbSession = Depends(get_db)):
     require_origin(request)
     email = normalize_email(str(payload.email))
-    check_rate_limit(db, request, "forgot_ip", limit=60, seconds=3600)
-    check_rate_limit(db, request, "forgot_global", "", limit=2000, seconds=3600, client_scoped=False)
+    check_rate_limit(db, request, "forgot_ip", limit=20, seconds=3600, trusted_client_only=True)
     check_rate_limit(db, request, "forgot_password", email, limit=3, seconds=3600)
     check_rate_limit(db, request, "forgot_account", email, limit=5, seconds=3600, client_scoped=False)
     user = db.scalar(select(User).where(User.email == email))
@@ -355,13 +356,14 @@ def forgot_password(payload: EmailRequest, request: Request, background_tasks: B
 @router.post("/auth/reset-password", response_model=Message)
 def reset_password(payload: ResetPasswordRequest, request: Request, db: DbSession = Depends(get_db)):
     require_origin(request)
-    check_rate_limit(db, request, "reset_password", limit=8, seconds=300)
+    check_rate_limit(db, request, "reset_password", digest_token(payload.token),
+                     limit=8, seconds=300, client_scoped=False)
     record = valid_token(db, payload.token, ("reset_password",))
     user = db.get(User, record.user_id)
     if user is None or not user.is_active:
         raise HTTPException(status_code=400, detail="Invalid or expired token")
     require_strong_password(payload.password, email=user.email, full_name=user.full_name)
-    user.password_hash = hash_password(payload.password)
+    user.password_hash = hash_password_guarded(payload.password)
     revoke_user_sessions(db, user.id)
     db.add(AuditEvent(subject_id=user.id, action="password.reset"))
     db.commit()

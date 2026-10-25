@@ -3,6 +3,8 @@ import hashlib
 import hmac
 import os
 import secrets
+import threading
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 import pyotp
@@ -17,6 +19,15 @@ from .models import MFAEnrollment, MFARecoveryCode, RateLimitEvent
 password_hasher = PasswordHash.recommended()
 SESSION_COOKIE = "cyberlab_session"
 SESSION_HOURS = 12
+
+# Password hashing is the expensive part of an unauthenticated authentication request.
+# A bounded number of hashes may run at once so a flood cannot exhaust CPU, but this is
+# pure admission control: it holds no per-identity state, is released as soon as a hash
+# finishes, and therefore cannot lock an account out for a fixed window the way a
+# counted rate-limit bucket can.
+AUTH_HASH_CONCURRENCY = max(1, int(os.getenv("AUTH_HASH_CONCURRENCY", "16") or 16))
+AUTH_HASH_QUEUE_SECONDS = max(0.0, float(os.getenv("AUTH_HASH_QUEUE_SECONDS", "2") or 2))
+_hash_slots = threading.BoundedSemaphore(AUTH_HASH_CONCURRENCY)
 
 
 def now() -> datetime:
@@ -52,6 +63,29 @@ def verify_password(password: str, password_hash: str) -> bool:
     return password_hasher.verify(password, password_hash)
 
 
+@contextmanager
+def _crypto_slot():
+    if not _hash_slots.acquire(timeout=AUTH_HASH_QUEUE_SECONDS):
+        raise HTTPException(status_code=503, detail="Authentication capacity saturated",
+                            headers={"Retry-After": "1"})
+    try:
+        yield
+    finally:
+        _hash_slots.release()
+
+
+def verify_password_guarded(password: str, password_hash: str) -> bool:
+    """Verify a password while bounding concurrent hashing work."""
+    with _crypto_slot():
+        return verify_password(password, password_hash)
+
+
+def hash_password_guarded(password: str) -> str:
+    """Hash a password while bounding concurrent hashing work."""
+    with _crypto_slot():
+        return hash_password(password)
+
+
 def make_session_token() -> str:
     return secrets.token_urlsafe(32)
 
@@ -80,29 +114,46 @@ def trusted_proxy_addresses() -> set[str]:
     }
 
 
-def client_address(request: Request) -> str:
-    """Resolve the throttle identity without trusting client-supplied values.
+def trusted_client_address(request: Request) -> str | None:
+    """Return a verified downstream client address, or ``None`` when unverifiable.
 
-    A forwarded address is honoured only when the immediate peer is a configured
-    trusted proxy; otherwise the socket peer is the only identity we can trust.
-    When the Next.js proxy is the peer and no trusted front proxy is configured,
-    every browser shares that peer address, so account-scoped buckets remain the
-    primary brute-force control (see docs/MILESTONE_01D_INTEGRATION_REPORT.md).
+    The forwarded address is trusted only when the immediate peer is a configured
+    proxy *and* it supplied the header. Anything else (including a client-invented
+    header, or a bare loopback proxy that forwards nothing) yields ``None``.
     """
     peer = request.client.host if request.client else "unknown"
-    if peer in trusted_proxy_addresses():
-        forwarded = request.headers.get("x-forwarded-for", "")
-        hops = [hop.strip() for hop in forwarded.split(",") if hop.strip()]
-        if hops:
-            # The nearest proxy appended the last hop; earlier entries are client claims.
-            return hops[-1]
-    return peer
+    if peer not in trusted_proxy_addresses():
+        return None
+    forwarded = request.headers.get("x-forwarded-for", "")
+    hops = [hop.strip() for hop in forwarded.split(",") if hop.strip()]
+    if not hops:
+        return None
+    # The nearest proxy appended the last hop; earlier entries are client claims.
+    return hops[-1]
+
+
+def client_address(request: Request) -> str:
+    """Resolve the socket peer used for accounting, never a client-supplied value."""
+    return request.client.host if request.client else "unknown"
 
 
 def check_rate_limit(db: DbSession, request: Request, action: str, identity: str = "",
-                     limit: int = 10, seconds: int = 60, *, client_scoped: bool = True) -> None:
+                     limit: int = 10, seconds: int = 60, *, client_scoped: bool = True,
+                     trusted_client_only: bool = False) -> None:
+    """Count an event against a bucket and raise 429 when the bucket is full.
+
+    ``trusted_client_only`` buckets are skipped unless the request carries a verified
+    downstream client address. Client-scoped buckets keyed on a shared, unverified
+    proxy address would let one caller deny the endpoint to everybody else behind it,
+    so they are only enforced inside a documented trusted-proxy boundary.
+    """
+    verified_client = trusted_client_address(request)
+    if trusted_client_only and verified_client is None:
+        return
     # Hash the identity and client address so the table does not store either value.
-    client = client_address(request)
+    # A verified downstream address is preferred so clients behind a trusted proxy get
+    # independent buckets; otherwise accounting falls back to the socket peer.
+    client = verified_client or client_address(request)
     subject = f"{client}:{normalize_email(identity)}" if client_scoped else normalize_email(identity)
     key = hashlib.sha256(f"{action}:{subject}".encode()).hexdigest()
     if db.bind is not None and db.bind.dialect.name == "postgresql":
