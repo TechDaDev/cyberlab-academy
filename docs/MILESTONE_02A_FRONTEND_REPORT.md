@@ -7,7 +7,8 @@ curriculum content is generated, simulated or cached in the browser.
 
 - **Branch:** `arena/milestone-02a-frontend`
 - **Base (stacked, not `main`):** `deepseek/milestone-02a-catalog` (`e917cb0`, PR #8)
-- **Commits:** `ac434c8` (implementation and tests) + the commit that adds this report
+- **Commits:** `ac434c8` (implementation and tests), `bfc36f8` (initial report),
+  `6879bfa` (step-up replay correction, see §11) + the commit that updates this report
 - **Pull request:** https://github.com/TechDaDev/cyberlab-academy/pull/9
 - **Backend:** untouched. No backend file, test, migration, auth or security code was modified.
 
@@ -118,9 +119,15 @@ mutating request is step-up protected and origin-checked server-side.
 
 ## 5. Honesty guardrails
 
-- **CEH v12** renders `1 / 20` published modules. Module 02–20 are never listed,
-  titled or summarised; the overview explicitly states that the remaining 19 are not
-  available and that titles are not fabricated.
+- **CEH v12** shows exactly what the API reports at that moment. `python -m app.seed_catalog`
+  creates a **draft** course (`planned_module_count = 20`) plus a single **draft**
+  Module 01 shell — no published modules and no lessons. Immediately after seeding,
+  therefore, the public catalog is empty (drafts are not listed) and Content Management
+  shows the draft course at `0 / 20` published modules with one draft module. The counts
+  become `1 / 20` only after an operator authors a lesson and publishes the lesson, the
+  module and the course. The UI never derives, rounds up or pre-fills these numbers, and
+  positions 02–20 are never listed, titled or summarised; the overview states that the
+  remaining positions are unavailable and that their titles are not fabricated.
 - The catalog's module table only contains modules the API returned.
 - `LessonViewer` shows *no* lesson text on `403` — no excerpt, no placeholder body.
 - The module explorer states that mission briefings, labs and assessments are not part
@@ -140,7 +147,8 @@ mutating request is step-up protected and origin-checked server-side.
 - Publish requests send no body, matching `extra="forbid"`.
 - Step-up (`403 … recent authentication/MFA required`) opens the existing
   reauthentication modal and replays the mutation; it is never swallowed as a
-  validation error.
+  validation error. The caller stays suspended until the flow settles, so the success
+  handler still runs (see §11).
 - Every error surface is `role="alert"` or an `Alert` with a translated message.
 - Markdown is rendered to React elements, so embedded `<script>`/`onclick` cannot
   execute; non-http(s) link targets stay inert.
@@ -168,11 +176,11 @@ Commands run from `frontend/`:
 | --- | --- |
 | `npm run typecheck` | pass (no output) |
 | `npm run lint` | pass (0 problems) |
-| `npm run test` | **12 files, 99 tests, all passed** |
+| `npm run test` | **13 files, 103 tests, all passed** |
 | `npm run build` | pass — 26 routes (8 new academic routes) |
 | `npm audit` | 0 vulnerabilities (unchanged) |
 
-New suites (30 tests):
+New suites (34 tests):
 
 - `__tests__/academic-catalog.test.tsx` (13) — catalog rendering, planned vs published
   counts, module roll-up links, empty catalog, 503 handling, curriculum sequence and
@@ -186,6 +194,12 @@ New suites (30 tests):
   lesson save payload/normalisation, live Markdown preview, lesson publish, student
   blocked from `/academics/manage` without an admin API call, manager access, and role
   navigation for all four roles including preserved `Demo` badges.
+- `__tests__/academic-step-up-replay.test.tsx` (4) — the real `useStepUpRetry` hook,
+  `AuthProvider` and `ReauthModal` against stubbed network responses: creation
+  succeeds after verification and refreshes the list exactly once, publication
+  succeeds and shows the new status, cancellation never executes the mutation, and a
+  failed replay surfaces the API error while keeping the form. Three of these four
+  fail against the pre-correction hook (see §11).
 - `__tests__/academic-contract.test.ts` (9) — every client method maps to the
   documented path and HTTP method in `shared-contracts/openapi.json`; publish
   operations have no request body; no status fields in PATCH payloads; no
@@ -229,7 +243,8 @@ FastAPI backend was running in this environment.
 ```bash
 # Backend (repository root)
 cd backend
-python -m app.seed_catalog          # CEH-V12 draft + Module 01 shell, no lesson content
+python -m app.seed_catalog          # draft CEH-V12 course (20 planned) + draft Module 01 shell;
+                                    # no lessons and no published modules until you publish them
 uvicorn app.main:app --reload
 
 # Frontend
@@ -241,3 +256,85 @@ CYBERLAB_BACKEND_URL=http://127.0.0.1:8000 npm run dev
 Sign in with an account holding `manager` or `administrator`, activate that role, then
 open `/academics` and `/academics/manage`. Without a reachable backend the catalog
 shows an explicit "unavailable" state — never demo curriculum.
+
+## 11. Review correction — step-up mutation replay
+
+Review found one integration defect in the step-up path. It is fixed in commit
+`6879bfa` on the same branch and PR (#9).
+
+### Root cause
+
+`useStepUpRetry` replayed the mutation inside the reauthentication modal's
+`onSuccess` callback and returned `undefined` to the caller immediately after
+opening the prompt:
+
+```ts
+onSuccess: async () => { await action(); },   // result discarded
+return undefined;                             // caller resumes here
+```
+
+Nothing awaited the verification flow, and the replay's return value had nowhere to
+go. Consequences:
+
+- The mutation **did** execute against PostgreSQL after verification, but the caller's
+  success handler never ran: creation dialogs stayed open, publish confirmation
+  dialogs stayed open, success toasts never appeared, and lists were never refreshed,
+  so the UI kept showing pre-request versions and statuses.
+- The caller's `finally` block re-enabled its submit button while the modal was still
+  open, allowing a second submission attempt.
+- A failed replay threw inside the modal's `catch`, after the modal had already
+  cleared its state — the error was rendered into a closed dialog and the operator saw
+  nothing.
+
+### Files changed
+
+| File | Change |
+| --- | --- |
+| `frontend/features/academics/use-step-up-retry.ts` | Rewritten: the promise stays pending across the verification flow and is settled by the replay; cancellation and failure are represented explicitly |
+| `frontend/features/auth/auth-context.tsx` | `requestStepUp` accepts an optional `onCancel`; `StepUpPromptState` carries it as `onCancelCallback`. No change to session, MFA or cookie behaviour |
+| `frontend/features/auth/reauth-modal.tsx` | `resetAndClose` distinguishes "dismissed" from "verified", notifying `onCancelCallback` only on dismissal (Cancel, Escape, overlay, MFA-enrolment link). The post-verification path is unchanged |
+| `frontend/__tests__/academic-step-up-replay.test.tsx` | New regression suite for the real hook, context and modal |
+
+Editor and dialog call sites were **not** modified: `runWithStepUp` keeps its
+`Promise<T | undefined>` signature, so `const created = await runWithStepUp(...)` and
+the existing `if (created) { … }` success blocks now work as originally intended.
+
+### Corrected behaviour
+
+1. The mutation is attempted; a non-step-up error rejects immediately, as before.
+2. A step-up `403` opens the prompt and leaves the caller suspended — submit buttons
+   stay disabled, forms stay populated.
+3. After successful verification the replay runs **once** (`replayStarted` guard), and:
+   - **success** → the promise resolves with the mutation result, so the caller's
+     success handler runs exactly once: dialog closes, success toast/notice, list and
+     status refresh, updated `content_version`;
+   - **failure** → the promise rejects with the real API error, the caller's `catch`
+     renders it inline (form-level or dialog alert), the form data is preserved and no
+     success feedback is shown;
+   - **cancellation** → the promise resolves `undefined`, the mutation is never
+     issued, nothing is reported as saved, and the form keeps its values.
+4. Cancellation is reported by the modal itself (all dismissal routes) and covered by
+   a safety net for closes that bypass it (session cleared elsewhere, unmount). The
+   replay flag is set synchronously before the request, so the close that follows a
+   successful verification can never be mistaken for a cancellation — and a
+   cancellation that races an in-flight verification prevents the replay instead of
+   letting it run unobserved.
+
+MFA enforcement, the reauthentication endpoint, cookie handling and the step-up
+`reason` resolution are untouched.
+
+### Verification
+
+| Check | Result |
+| --- | --- |
+| `npm run typecheck` | pass |
+| `npm run lint` | pass (0 problems) |
+| `npm run test` | **13 files, 103 tests, all passed** |
+| `npm run build` | pass — 26 routes |
+| Targeted regression check | the 4 new tests **fail 3/4** against the pre-correction hook (`bfc36f8`) and pass 4/4 with the fix |
+
+The regression suite covers the five required scenarios: course creation after
+verification, the success callback running once (one replay, one refresh, one
+confirmation message), the created course appearing in the refreshed list, publication
+after verification with the updated status, cancellation not executing the mutation,
+and a failed replay surfacing the API error with the form intact.
