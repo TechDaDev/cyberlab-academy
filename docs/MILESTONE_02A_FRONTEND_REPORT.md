@@ -8,7 +8,10 @@ curriculum content is generated, simulated or cached in the browser.
 - **Branch:** `arena/milestone-02a-frontend`
 - **Base (stacked, not `main`):** `deepseek/milestone-02a-catalog` (`e917cb0`, PR #8)
 - **Commits:** `ac434c8` (implementation and tests), `bfc36f8` (initial report),
-  `6879bfa` (step-up replay correction, see §11) + the commit that updates this report
+  `6879bfa` (step-up replay correction, §11), `40dcb65` (report update) + the commit that
+  adds the module quick-publish confirmation (§12) and this record
+- **QA:** Codex independent integration QA — **PASS WITH LIMITATIONS** (accepted for
+  local development; one low-severity UX discrepancy raised and corrected in §12)
 - **Pull request:** https://github.com/TechDaDev/cyberlab-academy/pull/9
 - **Backend:** untouched. No backend file, test, migration, auth or security code was modified.
 
@@ -176,24 +179,25 @@ Commands run from `frontend/`:
 | --- | --- |
 | `npm run typecheck` | pass (no output) |
 | `npm run lint` | pass (0 problems) |
-| `npm run test` | **13 files, 103 tests, all passed** |
+| `npm run test` | **13 files, 108 tests, all passed** |
 | `npm run build` | pass — 26 routes (8 new academic routes) |
 | `npm audit` | 0 vulnerabilities (unchanged) |
 
-New suites (34 tests):
+New suites (39 tests):
 
 - `__tests__/academic-catalog.test.tsx` (13) — catalog rendering, planned vs published
   counts, module roll-up links, empty catalog, 503 handling, curriculum sequence and
   missing-position notice, empty module list, module→lesson navigation, 403 lesson
   gate (and that no body is rendered), permitted lesson read, Markdown safety
   (scripts, `javascript:` links, empty body).
-- `__tests__/academic-authoring.test.tsx` (17) — draft course retrieval, seed hint,
+- `__tests__/academic-authoring.test.tsx` (22) — draft course retrieval, seed hint,
   exact `CourseCreate` payload, client validation, duplicate-code 409, draft course
   editor with blocked module publication, explicit course publish, draft module
   retrieval, duplicate-sequence 409 as a field error, module publish confirmation,
   lesson save payload/normalisation, live Markdown preview, lesson publish, student
-  blocked from `/academics/manage` without an admin API call, manager access, and role
-  navigation for all four roles including preserved `Demo` badges.
+  blocked from `/academics/manage` without an admin API call, manager access, role
+  navigation for all four roles including preserved `Demo` badges, and the five
+  module quick-publish confirmation cases added in §12.
 - `__tests__/academic-step-up-replay.test.tsx` (4) — the real `useStepUpRetry` hook,
   `AuthProvider` and `ReauthModal` against stubbed network responses: creation
   succeeds after verification and refreshes the list exactly once, publication
@@ -338,3 +342,56 @@ verification, the success callback running once (one replay, one refresh, one
 confirmation message), the created course appearing in the refreshed list, publication
 after verification with the updated status, cancellation not executing the mutation,
 and a failed replay surfacing the API error with the form intact.
+
+## 12. Codex QA correction — module quick-publish confirmation
+
+Codex independent QA returned **PASS WITH LIMITATIONS**, accepting Milestone 02A for
+local development with one low-severity UX discrepancy: the module quick-publish button
+in the course editor called the publication endpoint immediately, while the course,
+lesson and module-editor publications all required explicit confirmation.
+
+### Files changed
+
+| File | Change |
+| --- | --- |
+| `frontend/features/academics/course-editor.tsx` | The row's Publish button now opens `ConfirmActionDialog` instead of publishing; the request runs only from the dialog's confirm action |
+| `frontend/__tests__/academic-authoring.test.tsx` | Five focused tests for the confirmation flow (reusing the existing academic-client and step-up mocks) |
+
+No backend, contract, auth or design-system file was touched.
+
+### Behaviour
+
+1. **Open** — clicking Publish captures the selected module and opens the shared
+   confirmation dialog. No request is issued; the module row shows no busy state.
+2. **Dialog content** — title `Publish Module 01?`, plus the module title and sequence
+   (`"Introduction to Ethical Hacking" (sequence 1)`), an explicit statement that the
+   module becomes visible to students in the curriculum once its parent course is
+   published, and a notice that publication is one-way and needs at least one published
+   lesson (otherwise the API answers `409`).
+3. **Cancel, Escape or overlay click** — closes the dialog, clears any error, and issues
+   no mutation.
+4. **Confirm** — calls the existing `POST /admin/modules/{id}/publish` through
+   `runWithStepUp`, so a step-up `403` still routes through the reauthentication modal
+   and the replay keeps its result (see §11). One publication at a time: the dialog
+   disables both buttons while submitting and the handler ignores re-entrant confirms.
+5. **Success** — the dialog closes, the success toast reports the published module, and
+   the course/module data reloads so the refreshed status and the removal of the draft
+   Publish action are visible.
+6. **Failure** — the real API error is rendered inside the dialog (which stays open for
+   a retry), no success toast is emitted, and the list is not reloaded. A cancelled
+   step-up prompt publishes nothing and reports nothing.
+
+### Verification
+
+| Check | Result |
+| --- | --- |
+| `npm run typecheck` | pass |
+| `npm run lint` | pass (0 problems) |
+| `npm run test` | **13 files, 108 tests, all passed** (+5) |
+| `npm run build` | pass — 26 routes |
+| Targeted regression check | the 5 new tests **all fail** against `40dcb65` (immediate publish) and pass with the correction |
+
+New tests: dialog opens with title/sequence and no API call; cancel publishes nothing;
+confirm publishes exactly once, closes the dialog, shows success feedback and refreshes
+the row to `Published`; duplicate confirms while in flight issue a single request; a
+`409` renders in the dialog and is never reported as success.

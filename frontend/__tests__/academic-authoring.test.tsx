@@ -3,11 +3,13 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import ContentManagementPage from "@/app/(authenticated)/academics/manage/page";
+import { Toaster } from "@/components/ui/toaster";
 import { ContentManager } from "@/features/academics/content-manager";
 import { CourseEditor } from "@/features/academics/course-editor";
 import { LessonEditor } from "@/features/academics/lesson-editor";
 import { ModuleEditor } from "@/features/academics/module-editor";
 import { getNavigationForRole } from "@/features/roles/role-metadata";
+import { ToastStateProvider } from "@/hooks/use-toast";
 import { academicApi } from "@/lib/api/academic";
 import { ApiError } from "@/lib/api/errors";
 import type { Role, UserPublic } from "@/lib/types/api";
@@ -259,6 +261,189 @@ describe("Course creation", () => {
     expect(
       await screen.findByText("A course with that code already exists")
     ).toBeInTheDocument();
+  });
+});
+
+/** Renders with the toast provider so success feedback is observable. */
+function renderWithToasts(ui: React.ReactElement) {
+  return render(
+    <ToastStateProvider>
+      {ui}
+      <Toaster />
+    </ToastStateProvider>
+  );
+}
+
+const publishedCourse: CoursePublic = {
+  ...draftCourse,
+  status: "published",
+  content_version: 2,
+  published_at: "2026-10-01T09:00:00Z",
+};
+
+const publishedModule: ModulePublic = {
+  ...draftModule,
+  status: "published",
+  published_at: "2026-10-02T09:00:00Z",
+};
+
+describe("Module quick publish confirmation", () => {
+  it("opens a confirmation dialog that names the module and sequence, without publishing", async () => {
+    const user = userEvent.setup();
+    api.getAdminCourse.mockResolvedValue(publishedCourse);
+    api.listAdminModules.mockResolvedValue([draftModule]);
+
+    renderWithToasts(<CourseEditor courseId={publishedCourse.id} />);
+
+    await screen.findByText("Introduction to Ethical Hacking");
+    await user.click(screen.getByRole("button", { name: /^publish$/i }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      within(dialog).getByText("Publish Module 01?")
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(/"Introduction to Ethical Hacking" \(sequence 1\)/)
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(/visible to students in the curriculum once its parent course is published/i)
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("button", { name: /publish module/i })
+    ).toBeInTheDocument();
+
+    // Nothing is published until the operator confirms.
+    expect(api.publishModule).not.toHaveBeenCalled();
+  });
+
+  it("cancels without calling the publication endpoint", async () => {
+    const user = userEvent.setup();
+    api.getAdminCourse.mockResolvedValue(publishedCourse);
+    api.listAdminModules.mockResolvedValue([draftModule]);
+
+    renderWithToasts(<CourseEditor courseId={publishedCourse.id} />);
+
+    await screen.findByText("Introduction to Ethical Hacking");
+    await user.click(screen.getByRole("button", { name: /^publish$/i }));
+
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: /^cancel$/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+    expect(api.publishModule).not.toHaveBeenCalled();
+    // No refresh, no success feedback, and the module is still a draft.
+    expect(api.listAdminModules).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/Module 1 published/)).not.toBeInTheDocument();
+    expect(screen.getByText("Draft")).toBeInTheDocument();
+  });
+
+  it("publishes once after confirmation, closes the dialog and refreshes the list", async () => {
+    const user = userEvent.setup();
+    api.getAdminCourse.mockResolvedValue(publishedCourse);
+    api.listAdminModules
+      .mockResolvedValueOnce([draftModule])
+      .mockResolvedValue([publishedModule]);
+    api.publishModule.mockResolvedValue(publishedModule);
+
+    renderWithToasts(<CourseEditor courseId={publishedCourse.id} />);
+
+    await screen.findByText("Introduction to Ethical Hacking");
+    await user.click(screen.getByRole("button", { name: /^publish$/i }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(
+      within(dialog).getByRole("button", { name: /publish module/i })
+    );
+
+    await waitFor(() =>
+      expect(api.publishModule).toHaveBeenCalledWith(draftModule.id)
+    );
+    expect(api.publishModule).toHaveBeenCalledTimes(1);
+
+    // Success feedback, refreshed data and a closed dialog.
+    expect(
+      await screen.findByText(/Module 1 published/)
+    ).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+    expect(api.listAdminModules).toHaveBeenCalledTimes(2);
+    expect(api.getAdminCourse).toHaveBeenCalledTimes(2);
+
+    // The refreshed module row shows the new status and no longer offers Publish.
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    const moduleRow = screen
+      .getByText("Introduction to Ethical Hacking")
+      .closest("li");
+    expect(moduleRow).not.toBeNull();
+    expect(within(moduleRow as HTMLElement).getByText("Published")).toBeInTheDocument();
+    expect(
+      within(moduleRow as HTMLElement).queryByRole("button", { name: /^publish$/i })
+    ).toBeNull();
+  });
+
+  it("prevents duplicate submissions while the publication is in flight", async () => {
+    const user = userEvent.setup();
+    api.getAdminCourse.mockResolvedValue(publishedCourse);
+    api.listAdminModules.mockResolvedValue([draftModule]);
+
+    let resolvePublish: (value: ModulePublic) => void = () => {};
+    api.publishModule.mockImplementation(
+      () => new Promise<ModulePublic>((resolve) => {
+        resolvePublish = resolve;
+      })
+    );
+
+    renderWithToasts(<CourseEditor courseId={publishedCourse.id} />);
+
+    await screen.findByText("Introduction to Ethical Hacking");
+    await user.click(screen.getByRole("button", { name: /^publish$/i }));
+    const dialog = await screen.findByRole("dialog");
+    const confirm = within(dialog).getByRole("button", {
+      name: /publish module/i,
+    });
+    await user.click(confirm);
+
+    await waitFor(() => expect(confirm).toBeDisabled());
+    await user.click(confirm);
+    await user.click(confirm);
+    expect(api.publishModule).toHaveBeenCalledTimes(1);
+
+    resolvePublish(publishedModule);
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+  });
+
+  it("reports a publication failure in the dialog and keeps it open", async () => {
+    const user = userEvent.setup();
+    api.getAdminCourse.mockResolvedValue(publishedCourse);
+    api.listAdminModules.mockResolvedValue([draftModule]);
+    api.publishModule.mockRejectedValue(
+      new ApiError({
+        status: 409,
+        detail: "A module needs at least one published lesson",
+      })
+    );
+
+    renderWithToasts(<CourseEditor courseId={publishedCourse.id} />);
+
+    await screen.findByText("Introduction to Ethical Hacking");
+    await user.click(screen.getByRole("button", { name: /^publish$/i }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(
+      within(dialog).getByRole("button", { name: /publish module/i })
+    );
+
+    expect(
+      await screen.findByText("A module needs at least one published lesson")
+    ).toBeInTheDocument();
+    // The dialog survives for a retry, and nothing is reported as published.
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.queryByText(/Module 1 published/)).not.toBeInTheDocument();
+    expect(api.publishModule).toHaveBeenCalledTimes(1);
+    expect(api.listAdminModules).toHaveBeenCalledTimes(1);
   });
 });
 

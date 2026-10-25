@@ -115,6 +115,16 @@ function CourseEditorBody({
   const [publishingModuleId, setPublishingModuleId] = React.useState<
     string | null
   >(null);
+  /**
+   * Module awaiting publication confirmation. Kept after the dialog closes so the
+   * confirmation copy survives the exit animation instead of blanking out.
+   */
+  const [modulePublishTarget, setModulePublishTarget] =
+    React.useState<ModulePublic | null>(null);
+  const [modulePublishOpen, setModulePublishOpen] = React.useState(false);
+  const [modulePublishError, setModulePublishError] = React.useState<
+    string | null
+  >(null);
 
   const [createModuleOpen, setCreateModuleOpen] = React.useState(false);
 
@@ -191,14 +201,35 @@ function CourseEditorBody({
     }
   };
 
-  const handlePublishModule = async (moduleRecord: ModulePublic) => {
-    setPublishingModuleId(moduleRecord.id);
+  /** Opens the confirmation dialog; no request is issued until the operator confirms. */
+  const requestModulePublish = (moduleRecord: ModulePublic) => {
+    setModulePublishTarget(moduleRecord);
+    setModulePublishError(null);
+    setModulePublishOpen(true);
+  };
+
+  const closeModulePublish = () => {
+    setModulePublishOpen(false);
+    setModulePublishError(null);
+  };
+
+  const handlePublishModule = async () => {
+    const target = modulePublishTarget;
+    // One publication at a time: the dialog disables its own buttons, and this
+    // guard covers a second confirm fired while the first request is in flight.
+    if (!target || publishingModuleId !== null) return;
+
+    setPublishingModuleId(target.id);
+    setModulePublishError(null);
     try {
       const published = await runWithStepUp(
-        () => academicApi.publishModule(moduleRecord.id),
+        () => academicApi.publishModule(target.id),
         "Publishing a module requires re-verification within the last 5 minutes."
       );
+      // `undefined` means the step-up prompt was cancelled: nothing was published,
+      // so the dialog stays open and no success is reported.
       if (published) {
+        setModulePublishOpen(false);
         toast({
           title: `Module ${published.sequence} published`,
           description: `"${published.title}" is now visible in the published curriculum.`,
@@ -207,11 +238,10 @@ function CourseEditorBody({
         onReload();
       }
     } catch (err) {
-      toast({
-        title: "Module not published",
-        description: err instanceof ApiError ? err.detail : "Publishing failed.",
-        variant: "warning",
-      });
+      // The dialog stays open so the operator sees the real API error and can retry.
+      setModulePublishError(
+        err instanceof ApiError ? err.detail : "Publishing failed."
+      );
     } finally {
       setPublishingModuleId(null);
     }
@@ -441,7 +471,7 @@ function CourseEditorBody({
                                   ? "Publish the course before publishing its modules."
                                   : "Requires at least one published lesson."
                               }
-                              onClick={() => handlePublishModule(moduleRecord)}
+                              onClick={() => requestModulePublish(moduleRecord)}
                             >
                               {publishingModuleId === moduleRecord.id ? (
                                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -480,6 +510,41 @@ function CourseEditorBody({
           ) : null}
         </div>
       </div>
+
+      <ConfirmActionDialog
+        open={modulePublishOpen}
+        onOpenChange={(next) => {
+          if (!next) closeModulePublish();
+        }}
+        title={
+          modulePublishTarget
+            ? `Publish Module ${String(modulePublishTarget.sequence).padStart(2, "0")}?`
+            : "Publish module?"
+        }
+        description={
+          modulePublishTarget
+            ? `"${modulePublishTarget.title}" (sequence ${modulePublishTarget.sequence}) will move from draft to published. It becomes visible to students in the curriculum once its parent course is published.`
+            : "The selected module will move from draft to published."
+        }
+        confirmLabel="Publish module"
+        isSubmitting={
+          publishingModuleId !== null &&
+          publishingModuleId === modulePublishTarget?.id
+        }
+        errorMessage={modulePublishError}
+        notice={
+          <Alert variant="info">
+            <Workflow />
+            <AlertDescription>
+              Publication is a one-way status transition performed by the API and
+              cannot be undone through the interface. The module also needs at
+              least one published lesson; otherwise the API answers{" "}
+              <strong>409</strong>.
+            </AlertDescription>
+          </Alert>
+        }
+        onConfirm={handlePublishModule}
+      />
 
       <ConfirmActionDialog
         open={publishOpen}
