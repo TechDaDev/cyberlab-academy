@@ -13,7 +13,7 @@ This report documents the implementation and the development checks that were ru
 |---|---|
 | Branch | `codex/milestone-01d-integration` (PR #7, not merged) |
 | Previously tested commit | `14d2107cab123a745f52feb483cdbe1fe4346a4d` |
-| Fix commit | `724c615` — see §12 |
+| Fix commits | `724c615`, `8dd4ab9`, `6afe696` — see §12 |
 | `main` | not modified |
 | Codex QA report | left untracked and unmodified |
 
@@ -260,7 +260,7 @@ authorisation checks are unchanged and covered by the suites above.
 | Item | Value |
 |---|---|
 | Branch | `codex/milestone-01d-integration` |
-| Commit | `724c615` — code and regression tests; documentation follows in a second commit on the same branch |
+| Commits | `724c615` (code and regression tests), `8dd4ab9` (documentation), `6afe696` (untracks the reviewer's report, which stays local) |
 | Push | pushed to `origin/codex/milestone-01d-integration`; PR #7 updated, not merged |
 | `main` | not modified |
 | Codex QA report | untracked, unmodified |
