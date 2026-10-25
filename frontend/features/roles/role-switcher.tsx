@@ -91,7 +91,9 @@ export function RoleSwitcher({ className }: { className?: string }) {
           size="sm"
           aria-label={`Active role: ${activeMeta.label}. Switch session role`}
           className={cn(
-            "h-9 gap-2 border-cyan-500/30 bg-surface-elevated/70 px-3 text-xs sm:text-sm",
+            // Phones show the role icon only; the label appears from `sm` so the
+            // collapsed top bar never overflows on a 375px viewport.
+            "h-9 gap-2 border-cyan-500/30 bg-surface-elevated/70 px-2 text-xs sm:px-3 sm:text-sm",
             className
           )}
           disabled={pendingRole !== null}
@@ -102,10 +104,10 @@ export function RoleSwitcher({ className }: { className?: string }) {
             <ActiveIcon className="h-3.5 w-3.5 text-cyan-400" />
           )}
           <span className="hidden text-muted-foreground md:inline">Role:</span>
-          <span className="font-semibold text-foreground">
+          <span className="hidden font-semibold text-foreground sm:inline">
             {activeMeta.label}
           </span>
-          <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+          <ChevronDown className="hidden h-3.5 w-3.5 text-muted-foreground sm:block" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-72">

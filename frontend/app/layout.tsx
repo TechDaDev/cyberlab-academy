@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "@/styles/globals.css";
+import { fontVariables } from "@/lib/fonts";
 import { AuthProvider } from "@/features/auth/auth-context";
 import { ThemeProvider } from "@/hooks/use-theme";
 import { ToastStateProvider } from "@/hooks/use-toast";
@@ -20,7 +21,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark" suppressHydrationWarning>
+    <html lang="en" className={`dark ${fontVariables}`} suppressHydrationWarning>
       <body className="min-h-screen bg-background text-foreground antialiased">
         <ThemeProvider>
           <ToastStateProvider>

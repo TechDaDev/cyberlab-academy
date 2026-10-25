@@ -43,14 +43,23 @@ export default function LandingPage() {
 
       {/* Public Top Navigation */}
       <header className="sticky top-0 z-40 border-b border-border/80 bg-background/85 backdrop-blur-md">
-        <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
-          <Link href="/" aria-label="CyberLab Academy Home">
+        <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-3 px-4 sm:px-6 lg:px-8">
+          <Link
+            href="/"
+            aria-label="CyberLab Academy Home"
+            className="min-w-0 shrink-0"
+          >
             <CyberLogo />
           </Link>
 
+          {/*
+           * The section nav needs ~474px at `text-sm`/`gap-6` plus the logo and
+           * the action cluster, which only fits from 1024px. It used to appear at
+           * `md` (768px) and pushed the header past the viewport (16px overflow).
+           */}
           <nav
             aria-label="Landing page sections"
-            className="hidden md:flex items-center gap-6 text-sm text-muted-foreground"
+            className="hidden items-center gap-6 text-sm text-muted-foreground lg:flex"
           >
             <a href="#overview" className="hover:text-foreground transition-colors">
               Platform
@@ -69,26 +78,37 @@ export default function LandingPage() {
             </a>
           </nav>
 
-          <div className="flex items-center gap-2.5">
+          <div className="flex min-w-0 shrink-0 items-center gap-2 sm:gap-2.5">
             <ThemeToggle />
             {isAuthenticated && user ? (
               <Button asChild size="sm">
                 <Link
                   href={ROLE_METADATA[user.active_role].dashboardPath}
                 >
-                  <span>Open {ROLE_METADATA[user.active_role].label} Console</span>
+                  {/* "Open Administrator Console" is too wide for a phone header. */}
+                  <span className="hidden sm:inline">
+                    Open {ROLE_METADATA[user.active_role].label} Console
+                  </span>
+                  <span className="sm:hidden">
+                    {ROLE_METADATA[user.active_role].label}
+                  </span>
                   <ArrowRight className="h-4 w-4" />
                 </Link>
               </Button>
             ) : (
               <>
-                <Button asChild variant="ghost" size="sm">
+                {/*
+                 * Below `sm` the hero already offers "Sign In to Console", so the
+                 * secondary ghost button yields its space to the primary CTA.
+                 */}
+                <Button asChild variant="ghost" size="sm" className="hidden sm:inline-flex">
                   <Link href="/login">Sign In</Link>
                 </Button>
                 <Button asChild size="sm">
                   <Link href="/register">
                     <span>Create Account</span>
-                    <ArrowRight className="h-3.5 w-3.5" />
+                    {/* The arrow is decorative; dropping it keeps the phone header on one line. */}
+                    <ArrowRight className="hidden h-3.5 w-3.5 sm:block" />
                   </Link>
                 </Button>
               </>
