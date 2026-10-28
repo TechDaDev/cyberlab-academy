@@ -7,6 +7,10 @@ is ever simulated, seeded in the browser, or substituted with demonstration data
 
 - **Branch:** `arena/milestone-02b-frontend`
 - **Base (stacked, not `main`):** `deepseek/milestone-02b-cohorts` (`e78be99`, PR #10, unmerged)
+- **Commits:** `c241926` (implementation, tests and this report) + the commit that
+  records the pull request
+- **Pull request:** https://github.com/TechDaDev/cyberlab-academy/pull/11 — stacked on
+  PR #10, **not merged**
 - **Milestone 02A frontend:** preserved — the catalog, authoring, publication and
   step-up replay behaviour is unchanged (all 02A suites still pass).
 - **Backend:** untouched. No backend file, model, migration, test or generated
