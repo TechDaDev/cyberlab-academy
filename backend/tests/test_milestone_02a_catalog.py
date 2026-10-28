@@ -230,7 +230,8 @@ def test_students_cannot_see_drafts_and_published_catalog_is_visible(client, tmp
     assert second["status"] == "draft"
 
 
-def test_lesson_bodies_require_privileged_access_in_phase_02a(client, tmp_path):
+def test_lesson_bodies_need_a_live_relationship_or_a_managing_role(client, tmp_path):
+    """02A gated bodies to content managers; 02B adds enrollment/assignment-based access."""
     admin, dbmaker = client
     admin_ready(admin, dbmaker)
     mail_dir = tmp_path / "mail"
@@ -243,7 +244,7 @@ def test_lesson_bodies_require_privileged_access_in_phase_02a(client, tmp_path):
     student = make_student(admin, dbmaker, mail_dir)
     denied = student.get(f"/api/v1/lessons/{lesson['id']}")
     assert denied.status_code == 403
-    assert "Phase 02B" in denied.json()["detail"]
+    assert "enrollment" in denied.json()["detail"]
 
     instructor = make_student(admin, dbmaker, mail_dir, email="catalog-instructor@example.org",
                               instructor=True)
@@ -455,7 +456,7 @@ def test_openapi_contract_matches_the_running_application():
                      or path.startswith(("/api/v1/courses/", "/api/v1/admin/modules/",
                                          "/api/v1/admin/lessons/"))}
     assert len(catalog_paths) == 15
-    assert committed["info"]["version"] == "0.3.0"
+    assert committed["info"]["version"] == "0.4.0"
     admin_course = committed["paths"]["/api/v1/admin/courses/{course_id}"]
     assert set(admin_course) == {"get", "patch"}
     assert admin_course["get"]["responses"]["200"]["content"]["application/json"]["schema"][
