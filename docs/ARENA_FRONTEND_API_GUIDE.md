@@ -135,9 +135,10 @@ All catalog routes live under `/api/v1`, require the session cookie, and return
 | `GET /modules/{module_id}/lessons` | `LessonSummary[]` — metadata only, **never** `body_markdown` |
 | `GET /lessons/{lesson_id}` | `LessonDetail` with body, objectives and resources — **`403` for students and instructors** in 02A |
 
-`GET /lessons/{id}` is deliberately privileged until Phase 02B: lesson bodies need a cohort
-enrollment (student) or cohort assignment (instructor). Render that `403` as "content unlocks
-with enrollment", not as an error.
+`GET /lessons/{id}` was content-manager only in 02A. **Milestone 02B** unlocked it for active
+enrolled students and assigned instructors; see
+[ARENA_02B_FRONTEND_API_GUIDE.md](ARENA_02B_FRONTEND_API_GUIDE.md) §7. A `403` still means "no current
+relationship to this course", not an error.
 
 ### Content management (active Manager or Administrator)
 
