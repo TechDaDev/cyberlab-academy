@@ -209,3 +209,87 @@ class LearningResource(Base):
     external_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     asset_reference: Mapped[str | None] = mapped_column(String(250), nullable=True)
     lesson: Mapped[ModuleLesson] = relationship(back_populates="resources")
+
+
+class CohortStatus(str, Enum):
+    """Lifecycle of a teaching class."""
+
+    draft = "draft"
+    active = "active"
+    completed = "completed"
+    archived = "archived"
+
+
+class EnrollmentStatus(str, Enum):
+    active = "active"
+    withdrawn = "withdrawn"
+
+
+class CourseCohort(Base):
+    __tablename__ = "course_cohorts"
+    __table_args__ = (
+        UniqueConstraint("course_id", "code", name="uq_course_cohorts_code"),
+        CheckConstraint("status IN ('draft', 'active', 'completed', 'archived')",
+                        name="ck_course_cohorts_status"),
+        CheckConstraint("ends_at IS NULL OR starts_at IS NULL OR ends_at > starts_at",
+                        name="ck_course_cohorts_dates"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    course_id: Mapped[str] = mapped_column(ForeignKey("courses.id"), index=True)
+    code: Mapped[str] = mapped_column(String(40))
+    name: Mapped[str] = mapped_column(String(160))
+    status: Mapped[str] = mapped_column(String(20), default=CohortStatus.draft.value, index=True)
+    starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    course: Mapped[Course] = relationship()
+    instructors: Mapped[list["CohortInstructor"]] = relationship(
+        back_populates="cohort", cascade="all, delete-orphan",
+        order_by="CohortInstructor.assigned_at")
+    enrollments: Mapped[list["CohortEnrollment"]] = relationship(
+        back_populates="cohort", cascade="all, delete-orphan",
+        order_by="CohortEnrollment.enrolled_at")
+
+
+class CohortInstructor(Base):
+    """Teaching assignment. Removal is soft: ``removed_at`` closes the window."""
+
+    __tablename__ = "cohort_instructors"
+    __table_args__ = (
+        UniqueConstraint("cohort_id", "instructor_user_id",
+                         name="uq_cohort_instructors_assignment"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    cohort_id: Mapped[str] = mapped_column(ForeignKey("course_cohorts.id", ondelete="CASCADE"),
+                                           index=True)
+    instructor_user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    assigned_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    assigned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cohort: Mapped[CourseCohort] = relationship(back_populates="instructors")
+    instructor: Mapped[User] = relationship()
+
+
+class CohortEnrollment(Base):
+    """Student membership of a class. Academic progress belongs to Milestone 02C."""
+
+    __tablename__ = "cohort_enrollments"
+    __table_args__ = (
+        UniqueConstraint("cohort_id", "student_user_id", name="uq_cohort_enrollments_student"),
+        CheckConstraint("status IN ('active', 'withdrawn')",
+                        name="ck_cohort_enrollments_status"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    cohort_id: Mapped[str] = mapped_column(ForeignKey("course_cohorts.id", ondelete="CASCADE"),
+                                           index=True)
+    student_user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    status: Mapped[str] = mapped_column(String(20), default=EnrollmentStatus.active.value,
+                                        index=True)
+    enrolled_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    enrolled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    cohort: Mapped[CourseCohort] = relationship(back_populates="enrollments")
+    student: Mapped[User] = relationship()
