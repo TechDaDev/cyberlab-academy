@@ -38,6 +38,31 @@ vi.mock("@/lib/api/academic", () => ({
   },
 }));
 
+// Milestone 02B makes the lesson gate role-aware, so the viewer reads the active
+// session role. This suite is about the catalog surfaces; the role-specific copy
+// is covered by the cohort lesson-access suite.
+vi.mock("@/hooks/use-auth", () => ({
+  useAuth: () => ({
+    user: {
+      id: "user-student",
+      email: "student@cyberlab.test",
+      full_name: "Synthetic Student",
+      display_name: "Synthetic Student",
+      roles: ["student"],
+      active_role: "student",
+      is_active: true,
+      email_verified: true,
+      mfa_enabled: false,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+      last_login_at: null,
+    },
+    switchRole: vi.fn(),
+    requestStepUp: vi.fn(),
+    logout: vi.fn(),
+  }),
+}));
+
 const api = vi.mocked(academicApi);
 
 const course: CoursePublic = {
@@ -266,12 +291,14 @@ describe("Lesson access gate", () => {
 
     render(<LessonViewer lessonId="lesson-01" />);
 
-    expect(await screen.findByText("Lesson body locked")).toBeInTheDocument();
     expect(
-      screen.getByText(/enrollments and cohort assignments arrive/i)
+      await screen.findByText("Lesson body not available")
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/this screen shows no lesson text\. Nothing is simulated or substituted/i)
+      screen.getByText(/requires an active enrollment in an active class/i)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/shows no lesson text and offers no bypass/i)
     ).toBeInTheDocument();
     // The body is never rendered on a 403.
     expect(screen.queryByText(/Written authorization is mandatory/)).toBeNull();
