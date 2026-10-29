@@ -182,6 +182,8 @@ const activeEnrollment: EnrollmentPublic = {
   cohort_id: activeCohort.id,
   course_id: publishedCourse.id,
   student_user_id: verifiedStudent.id,
+  // Server-derived: the API returns the name on every administrative read.
+  student_full_name: verifiedStudent.full_name,
   status: "active",
   enrolled_at: "2026-10-03T09:00:00Z",
   ended_at: null,
@@ -191,6 +193,7 @@ const withdrawnEnrollment: EnrollmentPublic = {
   ...activeEnrollment,
   id: "enrollment-2",
   student_user_id: "user-student-withdrawn",
+  student_full_name: "Karim Withdrawn",
   status: "withdrawn",
   ended_at: "2026-10-10T09:00:00Z",
 };

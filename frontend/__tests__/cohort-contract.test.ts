@@ -349,6 +349,36 @@ describe.skipIf(!contract)("Class API contract alignment (OpenAPI 0.4.0)", () =>
     );
   });
 
+  it("mirrors the server-derived student name on the administrative enrollment view", () => {
+    const enrollment = contract?.components.schemas.EnrollmentPublic;
+
+    expect(Object.keys(enrollment?.properties ?? {}).sort()).toEqual([
+      "cohort_id",
+      "course_id",
+      "ended_at",
+      "enrolled_at",
+      "id",
+      "status",
+      "student_full_name",
+      "student_user_id",
+    ]);
+    // Required and server-derived: the roster relies on it being present.
+    expect(enrollment?.required).toContain("student_full_name");
+    expect(typesSource).toContain("student_full_name: string;");
+
+    // It is read-only: not an accepted request field, so a POST carrying it is a 422.
+    expect(
+      Object.keys(contract!.components.schemas.EnrollmentCreate.properties ?? {})
+    ).toEqual(["student_user_id"]);
+    expect(clientMethodBody("createEnrollment")).not.toContain("student_full_name");
+    expect(clientMethodBody("updateEnrollment")).not.toContain("student_full_name");
+
+    // Scope stays administrative — the student-facing schema never carries it.
+    expect(
+      Object.keys(contract!.components.schemas.StudentEnrollmentPublic.properties ?? {})
+    ).not.toContain("student_full_name");
+  });
+
   it("never fabricates class membership from the preview-demo adapter", () => {
     expect(apiSource).not.toContain('"preview-demo"');
     expect(apiSource).not.toContain("isPreviewDemoFeatureAllowed");

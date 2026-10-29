@@ -6,15 +6,18 @@ Every screen renders real responses declared in `shared-contracts/openapi.json`
 is ever simulated, seeded in the browser, or substituted with demonstration data.
 
 - **Branch:** `arena/milestone-02b-frontend`
-- **Base (stacked, not `main`):** `deepseek/milestone-02b-cohorts` (`e78be99`, PR #10, unmerged)
-- **Commits:** `c241926` (implementation, tests and this report) + the commit that
-  records the pull request
+- **Base (stacked, not `main`):** `deepseek/milestone-02b-cohorts` (PR #10, unmerged)
+  — now at `7789ad5`, merged into this branch in `d0e3715`
+- **Commits:** `c241926` (implementation, tests and this report), `cd3b5d8` (report
+  record), `d0e3715` (merge of backend `7789ad5`) + the roster correction described in
+  §11
 - **Pull request:** https://github.com/TechDaDev/cyberlab-academy/pull/11 — stacked on
   PR #10, **not merged**
 - **Milestone 02A frontend:** preserved — the catalog, authoring, publication and
   step-up replay behaviour is unchanged (all 02A suites still pass).
-- **Backend:** untouched. No backend file, model, migration, test or generated
-  contract was modified by this branch.
+- **Backend:** untouched by the frontend work. The new backend commit was integrated
+  by merge only; no backend file, model, migration, test or generated contract was
+  edited here.
 - **Status:** implementation complete, verified locally, PR open for review. Not merged.
 
 ---
@@ -201,10 +204,10 @@ Commands run from `frontend/`:
 | --- | --- |
 | `npm run typecheck` | pass (no output) |
 | `npm run lint` | pass (0 problems) |
-| `npm run test` | **19 files, 173 tests, all passed** |
+| `npm run test` | **20 files, 181 tests, all passed** |
 | `npm run build` | pass — 32 routes (6 new 02B routes) |
 
-New suites (65 tests):
+New suites (73 tests):
 
 - `__tests__/cohort-management.test.tsx` (13) — class list rendering, server-side
   course/status filters, draft creation payload (and that `status` is never sent),
@@ -254,11 +257,10 @@ browser end-to-end run against a live FastAPI + Postgres stack was performed her
 
 ## 9. Known limitations
 
-- Enrollments created by the API do not expose a student display name to
-  administrators (`EnrollmentPublic` carries `student_user_id` only, and
-  `GET /admin/users` has no id filter), so the manager roster shows the user id —
-  annotated with the name for accounts selected during the session — and points to
-  the instructor roster for names. Nothing is inferred.
+- The administrative roster labels rows with `student_full_name`, which the API
+  resolves from the student account on every read (§11). The user id is shown as
+  secondary technical detail; no email or other personal field is exposed by the
+  administrative enrollment view.
 - `GET /admin/users` has no pagination; eligibility search therefore returns the
   server's filtered set for the typed query and the picker renders it as-is.
 - Class metadata beyond name/date window (capacity, location, syllabus) has no
@@ -283,3 +285,67 @@ npm run dev                                  # http://localhost:3000
 
 `CYBERLAB_BACKEND_URL` (server-side) points the `/api/v1` proxy at FastAPI. Without
 it the class screens show their unavailable state; they never fall back to fixtures.
+
+## 11. QA correction — authoritative roster names
+
+Codex's independent integration QA returned **PASS WITH LIMITATIONS**. The one
+functional limitation was that the administrative roster showed raw student UUIDs
+after a reload: `EnrollmentPublic` carried `student_user_id` only, so the panel kept
+the names it had seen in a local `knownNames` state object — memory that is empty in
+a fresh browser tab.
+
+DeepSeek resolved it in the backend (`7789ad5`, merged here in `d0e3715`): the
+administrative enrollment view now returns a **required, server-derived**
+`student_full_name` on the `GET`, `POST` and `PATCH` responses. The contract change is
+additive — one property on `EnrollmentPublic`, no path or operation changed, API
+version still 0.4.0 — and `StudentEnrollmentPublic` is unchanged.
+
+### Files changed
+
+| File | Change |
+| --- | --- |
+| `backend/*`, `shared-contracts/openapi.json` | not edited here; brought in by the merge of `7789ad5` |
+| `frontend/lib/types/cohorts.ts` | `EnrollmentPublic.student_full_name: string` (required), with the read-only/administrative scope documented |
+| `frontend/features/academics/cohorts/cohort-enrollment-panel.tsx` | `knownNames` state, `setKnownNames` and the id-only fallback removed; rows render `enrollment.student_full_name` as the primary label with `student_user_id` as secondary technical detail |
+| `frontend/__tests__/cohort-enrollment-roster.test.tsx` | new focused suite (7 tests) |
+| `frontend/__tests__/cohort-assignments-and-enrollment.test.tsx` | fixtures carry the new required field |
+| `frontend/__tests__/cohort-contract.test.ts` | guards the new field, its required status, and that it is never sent |
+
+### Behaviour
+
+- The name always comes from the response payload. Nothing is remembered between
+  renders, so a reopened page, a refreshed roster and a brand-new browser tab all show
+  names.
+- A profile rename is reflected on the next read, because the server resolves the name
+  each time the roster is fetched.
+- Withdrawal and reactivation keep the same label; only the status badge changes.
+- No directory request is made to resolve names, and the field is never sent back:
+  `POST /admin/cohorts/{id}/enrollments` still carries `student_user_id` only (sending
+  `student_full_name` would be a `422`), and the `PATCH` transition carries `status`
+  only.
+- Everything else is untouched: enrollment authorization, instructor assignment,
+  lifecycle transitions, self-enrollment prohibition, lesson gating, step-up replay,
+  `204` removal handling and role-based navigation.
+
+### Verification
+
+Commands run from `frontend/`:
+
+| Command | Result |
+| --- | --- |
+| `npm run typecheck` | pass (no output) |
+| `npm run lint` | pass (0 problems) |
+| focused cohort suites (7 files) | pass — 73 tests |
+| `npm run test` | **20 files, 181 tests, all passed** |
+| `npm run build` | pass — 32 routes (unchanged) |
+
+`__tests__/cohort-enrollment-roster.test.tsx` (7 tests) covers the correction points
+directly: an existing enrollment is labelled from `student_full_name` with no directory
+call, the name survives an unmount/remount, a renamed student updates on reload,
+withdrawal and reactivation preserve the label (and the transition body stays
+`status`-only), the panel source contains no `knownNames` cache, enrollment requests
+carry only `student_user_id`, and the student-facing schema is asserted to have no
+`student_full_name`.
+
+This is a self-verified correction. No second independent Codex QA run has been
+performed on it, and none is claimed here.

@@ -46,12 +46,21 @@ export interface CohortInstructorPublic {
   removed_at: string | null;
 }
 
-/** `EnrollmentPublic` */
+/**
+ * `EnrollmentPublic` — administrative enrollment view.
+ *
+ * `student_full_name` is **required and server-derived**: the backend resolves it
+ * from the student's account on every read, so the roster keeps showing names
+ * after a reload and follows later profile changes. It is not an accepted request
+ * field — sending it on `POST` is a `422` — and it never appears in the
+ * student-facing `StudentEnrollmentPublic` payloads.
+ */
 export interface EnrollmentPublic {
   id: string;
   cohort_id: string;
   course_id: string;
   student_user_id: string;
+  student_full_name: string;
   status: EnrollmentStatus;
   enrolled_at: string;
   ended_at: string | null;

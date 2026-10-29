@@ -49,8 +49,10 @@ const ELIGIBILITY_RULES = [
  * expected when a student is already on the roster: the reason is shown and the
  * roster is refetched so the page cannot disagree with the server.
  *
- * The administrative listing exposes the student's user id only; display names for
- * learners are served by the instructor roster, which requires a live assignment.
+ * Each row is labelled with `student_full_name`, which the API derives from the
+ * student's account on every read. The client keeps no name cache of its own: names
+ * therefore survive reloads and follow profile changes, and nothing has to be
+ * fetched from the user directory to resolve them.
  */
 export function CohortEnrollmentPanel({
   cohort,
@@ -71,7 +73,6 @@ export function CohortEnrollmentPanel({
   } | null>(null);
   const [transitioning, setTransitioning] = React.useState(false);
   const [transitionError, setTransitionError] = React.useState<string | null>(null);
-  const [knownNames, setKnownNames] = React.useState<Record<string, string>>({});
 
   const { data, error, loading, reload } = useApiResource<PageEnrollments>(
     () =>
@@ -101,7 +102,6 @@ export function CohortEnrollmentPanel({
         "Enrolling a student requires re-verification within the last 5 minutes."
       );
       if (created) {
-        setKnownNames((prev) => ({ ...prev, [user.id]: user.full_name }));
         toast({
           title: "Student enrolled",
           description: `${user.full_name} was added to "${cohort.name}".`,
@@ -296,22 +296,14 @@ export function CohortEnrollmentPanel({
                       className="border-b border-border/40 align-middle last:border-0"
                     >
                       <td className="py-2.5 pr-3">
-                        <p className="text-sm text-foreground">
-                          {knownNames[enrollment.student_user_id] ?? (
-                            <span className="font-mono text-[11px]">
-                              {enrollment.student_user_id}
-                            </span>
-                          )}
+                        {/* Server-derived on every read, so the name survives a
+                            reload and follows later profile changes. */}
+                        <p className="text-sm font-medium text-foreground">
+                          {enrollment.student_full_name}
                         </p>
-                        {knownNames[enrollment.student_user_id] ? (
-                          <p className="font-mono text-[10px] text-muted-foreground">
-                            {enrollment.student_user_id}
-                          </p>
-                        ) : (
-                          <p className="text-[10px] text-muted-foreground">
-                            Display names are shown on the instructor roster.
-                          </p>
-                        )}
+                        <p className="font-mono text-[10px] text-muted-foreground">
+                          {enrollment.student_user_id}
+                        </p>
                       </td>
                       <td className="py-2.5 pr-3">
                         <EnrollmentStatusBadge status={enrollment.status} />
