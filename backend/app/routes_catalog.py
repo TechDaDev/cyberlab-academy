@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DbSession
 
+from .access import DENIED as LESSON_ACCESS_DENIED, can_read_lesson_body
 from .auth_state import AuthContext, authorize, get_auth_context
 from .database import get_db
 from .models import (AuditEvent, ContentStatus, Course, CourseModule, LearningResource,
@@ -25,8 +26,7 @@ CONTENT_MANAGERS = {Role.manager, Role.administrator}
 DRAFT = ContentStatus.draft.value
 PUBLISHED = ContentStatus.published.value
 
-LESSON_BODY_DENIED = ("Lesson content requires a cohort enrollment or instructor assignment "
-                      "and is introduced in Phase 02B")
+LESSON_BODY_DENIED = LESSON_ACCESS_DENIED
 
 
 def manages_content(context: AuthContext) -> bool:
@@ -231,7 +231,7 @@ def read_lesson(lesson_id: str, context: AuthContext = Depends(get_auth_context)
                 db: DbSession = Depends(get_db)):
     authorize(context, set(Role))
     lesson = get_lesson(db, lesson_id)
-    if not manages_content(context):
+    if not can_read_lesson_body(db, context, lesson):
         raise HTTPException(status_code=403, detail=LESSON_BODY_DENIED)
     return lesson_detail(lesson)
 
