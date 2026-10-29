@@ -1,5 +1,6 @@
 import {
   BookOpen,
+  BookOpenCheck,
   GraduationCap,
   KeyRound,
   LayoutDashboard,
@@ -218,6 +219,12 @@ export function getNavigationForRole(activeRole: Role): NavSection[] {
           description: "Published CEH curriculum",
         },
         {
+          label: "My Classes",
+          href: "/academics/learn",
+          icon: BookOpenCheck,
+          description: "Own enrollments and course access",
+        },
+        {
           label: "Available Modules",
           href: "/academics#available-modules",
           icon: BookOpen,
@@ -233,6 +240,12 @@ export function getNavigationForRole(activeRole: Role): NavSection[] {
           href: "/academics",
           icon: Library,
           description: "Published CEH curriculum",
+        },
+        {
+          label: "Assigned Classes",
+          href: "/academics/teach",
+          icon: Users,
+          description: "Live teaching assignments & rosters",
         },
         {
           label: "Curriculum Explorer",
@@ -257,6 +270,12 @@ export function getNavigationForRole(activeRole: Role): NavSection[] {
           icon: PencilRuler,
           description: "Draft courses, modules and lessons",
         },
+        {
+          label: "Class Management",
+          href: "/academics/manage/cohorts",
+          icon: GraduationCap,
+          description: "Classes, instructors & enrollments",
+        },
       ],
     },
     administrator: {
@@ -273,6 +292,12 @@ export function getNavigationForRole(activeRole: Role): NavSection[] {
           href: "/academics/manage",
           icon: PencilRuler,
           description: "Curriculum lifecycle control",
+        },
+        {
+          label: "Class Management",
+          href: "/academics/manage/cohorts",
+          icon: GraduationCap,
+          description: "Classes, instructors & enrollments",
         },
       ],
     },

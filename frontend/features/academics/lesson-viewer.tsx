@@ -26,8 +26,10 @@ import { ErrorState, LoadingState } from "@/components/shared/states";
 import { ContentStatusBadge } from "@/features/academics/content-status-badge";
 import { describeAcademicError } from "@/features/academics/error-message";
 import { Markdown } from "@/features/academics/markdown";
+import { useAuth } from "@/hooks/use-auth";
 import { useApiResource } from "@/features/academics/use-api-resource";
 import { academicApi } from "@/lib/api/academic";
+import type { Role } from "@/lib/types/api";
 import {
   RESOURCE_TYPE_LABELS,
   type LessonDetail,
@@ -85,12 +87,52 @@ function ResourceRow({ resource }: { resource: ResourcePublic }) {
 /**
  * Explains why a lesson body is unreachable.
  *
- * `GET /api/v1/lessons/{id}` returns `403` for students and instructors in
- * Milestone 02A. That is an intentional capability boundary — lesson bodies need
- * a cohort enrollment (student) or cohort assignment (instructor), which Phase
- * 02B introduces. The UI must not work around it or invent content.
+ * `GET /api/v1/lessons/{id}` is relationship-gated: a student needs an active
+ * enrollment in an *active* class of the lesson's course, and an instructor needs
+ * a live assignment in an active class of that course. Publishing state is checked
+ * as well, so an unpublished lesson stays closed even inside an active class.
+ *
+ * A `403` is therefore a normal capability boundary, not a failure — but the reason
+ * differs per role, and the copy must not suggest a workaround. Nothing is cached
+ * and nothing is substituted: the gate is re-evaluated on every visit, so a
+ * withdrawal or a removed assignment takes effect immediately.
  */
-function LessonLocked({ courseId }: { courseId: string | null }) {
+function LessonLocked({
+  role,
+  courseId,
+}: {
+  role: Role | null;
+  courseId: string | null;
+}) {
+  const explanation: Record<string, { reason: string; next: string; href: string }> = {
+    student: {
+      reason:
+        "Reading a lesson body requires an active enrollment in an active class of this course.",
+      next: "Check your enrollments. A withdrawn enrollment, or a class that is not active, does not grant lesson access.",
+      href: "/academics/learn",
+    },
+    instructor: {
+      reason:
+        "Reading a lesson body requires a live teaching assignment in an active class of this course.",
+      next: "Open your assigned classes. An assignment that was removed stops granting access immediately.",
+      href: "/academics/teach",
+    },
+    manager: {
+      reason:
+        "Your active session role cannot read this lesson body directly. The lesson may be unpublished, or the class relationship required for this body is missing.",
+      next: "Draft curriculum is read from content management instead.",
+      href: "/academics/manage",
+    },
+    administrator: {
+      reason:
+        "Your active session role cannot read this lesson body directly. The lesson may be unpublished, or the class relationship required for this body is missing.",
+      next: "Draft curriculum is read from academic administration instead.",
+      href: "/academics/manage",
+    },
+  };
+
+  const copy = role ? explanation[role] : null;
+
   return (
     <div className="space-y-4">
       <Card className="cyber-panel border-amber-500/30">
@@ -100,7 +142,7 @@ function LessonLocked({ courseId }: { courseId: string | null }) {
               <Lock className="h-4 w-4 text-amber-400" />
             </span>
             <div>
-              <CardTitle className="text-lg">Lesson body locked</CardTitle>
+              <CardTitle className="text-lg">Lesson body not available</CardTitle>
               <CardDescription>
                 Curriculum metadata is available; the full lesson text is not.
               </CardDescription>
@@ -109,17 +151,30 @@ function LessonLocked({ courseId }: { courseId: string | null }) {
         </CardHeader>
         <CardContent className="space-y-3 text-sm leading-relaxed text-muted-foreground">
           <p>
-            Reading a full lesson requires an active enrollment in a cohort
-            (students) or an assigned cohort (instructors). Milestone 02A ships
-            the academic catalog only — enrollments and cohort assignments arrive
-            in Phase 02B.
+            {copy?.reason ??
+              "Reading a lesson body requires an active class relationship: an enrollment for students, a live assignment for instructors."}
           </p>
+          {copy ? <p>{copy.next}</p> : null}
           <p>
-            Until then the API returns <code className="font-mono text-xs">403</code>{" "}
-            for this route and this screen shows no lesson text. Nothing is
-            simulated or substituted.
+            The API answered <code className="font-mono text-xs">403</code> for this
+            lesson. This screen shows no lesson text and offers no bypass: access is
+            re-checked server-side on every request and nothing is cached locally.
           </p>
           <div className="flex flex-wrap gap-2 pt-1">
+            {copy ? (
+              <Button asChild size="sm" variant="default">
+                <Link href={copy.href}>
+                  <GraduationCap className="h-3.5 w-3.5" />
+                  <span>
+                    {role === "student"
+                      ? "My classes"
+                      : role === "instructor"
+                        ? "Assigned classes"
+                        : "Academic workspace"}
+                  </span>
+                </Link>
+              </Button>
+            ) : null}
             <Button asChild size="sm" variant="outline">
               <Link href="/academics">
                 <ArrowLeft className="h-3.5 w-3.5" />
@@ -141,9 +196,8 @@ function LessonLocked({ courseId }: { courseId: string | null }) {
       <Alert variant="info">
         <GraduationCap />
         <AlertDescription>
-          Lesson titles, sequence and content versions remain visible on the
-          module page. Only the authored body, objectives and resource list are
-          gated.
+          Lesson titles, sequence and content versions remain visible on the module
+          page. Only the authored body, objectives and resource list are gated.
         </AlertDescription>
       </Alert>
     </div>
@@ -151,6 +205,7 @@ function LessonLocked({ courseId }: { courseId: string | null }) {
 }
 
 export function LessonViewer({ lessonId }: { lessonId: string }) {
+  const { user } = useAuth();
   const { data, error, loading, reload } = useApiResource<LessonDetail>(
     () => academicApi.getLesson(lessonId),
     `lesson:${lessonId}`
@@ -160,9 +215,16 @@ export function LessonViewer({ lessonId }: { lessonId: string }) {
     return <LoadingState label="Checking lesson access..." rows={3} />;
   }
 
-  // An enrollment gate is an expected boundary, not a failure.
+  // The relationship gate is an expected boundary, not a failure. The error wins
+  // over any previously loaded body so a revoked enrollment never leaves content
+  // on screen.
   if (error?.status === 403) {
-    return <LessonLocked courseId={null} />;
+    return (
+      <LessonLocked
+        role={user?.active_role ?? null}
+        courseId={null}
+      />
+    );
   }
 
   if (error) {
