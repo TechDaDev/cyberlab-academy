@@ -61,6 +61,28 @@ Independent integration QA is Codex's responsibility. This report claims local v
 | POST | `/admin/cohorts/{cohort_id}/enrollments` |
 | PATCH | `/admin/enrollments/{enrollment_id}` |
 
+#### Administrative enrollment view (post-QA correction)
+
+`EnrollmentPublic` now includes the required `student_full_name`, resolved from `users.full_name`
+on every read so the Manager roster keeps showing names after a page reload:
+
+```json
+{"id": "…", "cohort_id": "…", "course_id": "…", "student_user_id": "…",
+ "student_full_name": "Synthetic Learner", "status": "active",
+ "enrolled_at": "2026-10-29T01:00:00Z", "ended_at": null}
+```
+
+- Server-derived only: `student_full_name` is not an accepted request field, so a `POST` carrying
+  it returns `422`.
+- The paginated roster uses a single `CohortEnrollment ⋈ users` join, so a page of N enrollments
+  costs one query instead of N lookups; single-record mutations reuse the user row they already
+  loaded.
+- No email or other personal field was added, and `StudentEnrollmentPublic` (`/me/enrollments`) is
+  unchanged — it has no name field, and students still cannot reach the administrative roster
+  (`403`).
+- Contract impact: `EnrollmentPublic` gained one property; no path, operation or other schema
+  changed, and the API version stays `0.4.0`.
+
 ### Instructor (active Instructor role + live assignment)
 
 `GET /instructor/cohorts`, `GET /instructor/cohorts/{cohort_id}`,
@@ -135,9 +157,9 @@ Commands from `backend/` with `.venv`:
 
 | Command | Result |
 |---|---|
-| `pytest -q tests/test_milestone_02b_cohorts.py` | **10 passed, 1 skipped** (skip = PostgreSQL-only concurrency test) |
-| `pytest -q` (SQLite) | **94 passed, 9 skipped** |
-| `pytest -q` with `CYBERLAB_TEST_POSTGRES_URL` | **103 passed** |
+| `pytest -q tests/test_milestone_02b_cohorts.py` | **11 passed, 1 skipped** (skip = PostgreSQL-only concurrency test) |
+| `pytest -q` (SQLite) | **95 passed, 9 skipped** |
+| `pytest -q` with `CYBERLAB_TEST_POSTGRES_URL` | **104 passed** |
 | `alembic upgrade head` / `downgrade 0003_academic_catalog` / `upgrade head` (SQLite) | clean |
 | PostgreSQL migration round trip (via the shared fixture) | clean |
 
@@ -155,6 +177,7 @@ Coverage against the requested list:
 | Active-role enforcement | `test_active_role_decides_each_surface` — dual-role user, anonymous `401`, student-on-admin `403` |
 | Privilege guards | `test_cohort_privileges_require_origin_role_and_step_up` |
 | Own-record isolation | `test_student_enrollment_reads_expose_only_own_records` |
+| Roster names | `test_administrative_enrollments_carry_the_student_name` — name on create, on a fresh read, after withdrawal and reactivation, after a profile rename; forged `student_full_name` rejected; student blocked from the admin roster; own schema unchanged |
 | OpenAPI consistency | `test_openapi_contract_matches_and_stays_additive` |
 | PostgreSQL migration | `test_postgres_catalog_migration_upgrade_and_downgrade` extended path + `0004` in the shared suite |
 
@@ -174,6 +197,9 @@ Temporary database, `python -m app.run` on `127.0.0.1:8012`, removed afterwards:
 - Version `0.3.0 → 0.4.0`; **14 new paths**, 17 new operations, 17 new schemas.
 - **Zero** changes to pre-existing paths or schemas: the lesson-read extension alters behavior, not
   the contract shape.
+- One deliberate post-QA addition inside `0.4.0`: `EnrollmentPublic.student_full_name` (required,
+  server-derived). No path or operation changed and no other schema was touched, so the change stays
+  additive for existing consumers.
 - New tags: `Cohort management`, `Teaching`, `Enrollment`.
 - Regenerate with `python scripts/export_openapi.py`; the parity test fails if the committed file drifts.
 

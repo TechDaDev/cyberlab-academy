@@ -502,6 +502,60 @@ def test_cohort_privileges_require_origin_role_and_step_up(client, tmp_path):
     assert manager != student
 
 
+def test_administrative_enrollments_carry_the_student_name(client, tmp_path):
+    admin, dbmaker = client
+    admin_ready(admin, dbmaker)
+    mail_dir = tmp_path / "mail"
+    catalog = published_catalog(admin, code="NAME-01", title="Named roster course")
+    instructor = make_user(admin, dbmaker, mail_dir, "name-teacher@example.org",
+                           roles=("instructor",))
+    student = make_user(admin, dbmaker, mail_dir, "name-student@example.org")
+    active = active_class(admin, catalog["course"]["id"], [instructor], code="NAME-01-A")
+
+    created = enroll(admin, active["id"], student)
+    assert created.status_code == 201
+    assert created.json()["student_full_name"] == "Synthetic Learner"
+    enrollment_id = created.json()["id"]
+
+    # A fresh request re-reads the name from users instead of trusting anything the caller sent.
+    reloaded = admin.get(f"/api/v1/admin/cohorts/{active['id']}/enrollments")
+    assert reloaded.status_code == 200
+    assert reloaded.json()["items"][0]["student_full_name"] == "Synthetic Learner"
+    assert set(reloaded.json()["items"][0]) == {
+        "id", "cohort_id", "course_id", "student_user_id", "student_full_name", "status",
+        "enrolled_at", "ended_at"}
+
+    withdrawn = admin.patch(f"/api/v1/admin/enrollments/{enrollment_id}",
+                            json={"status": "withdrawn"})
+    assert withdrawn.status_code == 200
+    assert withdrawn.json()["student_full_name"] == "Synthetic Learner"
+    reactivated = admin.patch(f"/api/v1/admin/enrollments/{enrollment_id}",
+                              json={"status": "active"})
+    assert reactivated.json()["student_full_name"] == "Synthetic Learner"
+
+    # Renaming the account is reflected on the next roster read.
+    student_client = signed_in("name-student@example.org", role="student")
+    renamed = student_client.patch("/api/v1/users/me", json={"full_name": "Renamed Learner"})
+    assert renamed.status_code == 200
+    assert admin.get(f"/api/v1/admin/cohorts/{active['id']}/enrollments").json()[
+        "items"][0]["student_full_name"] == "Renamed Learner"
+
+    # The name is server-derived: a client cannot supply it.
+    forged = admin.post(f"/api/v1/admin/cohorts/{active['id']}/enrollments",
+                        json={"student_user_id": student, "student_full_name": "Impostor"})
+    assert forged.status_code == 422
+
+    # Students never reach the administrative roster, and their own schema is unchanged.
+    assert student_client.get(
+        f"/api/v1/admin/cohorts/{active['id']}/enrollments").status_code == 403
+    assert student_client.patch(f"/api/v1/admin/enrollments/{enrollment_id}",
+                                json={"status": "withdrawn"}).status_code == 403
+    own = student_client.get("/api/v1/me/enrollments").json()
+    assert own["total"] == 1
+    assert "student_full_name" not in own["items"][0]
+    assert "email" not in json.dumps(own["items"][0])
+
+
 def test_openapi_contract_matches_and_stays_additive():
     committed = json.loads(CONTRACT.read_text())
     assert committed == app.openapi()
