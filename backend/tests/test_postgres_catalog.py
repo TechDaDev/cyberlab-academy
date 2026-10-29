@@ -77,3 +77,19 @@ def test_postgres_seed_is_idempotent(postgres_client):
         modules = db.scalars(select(CourseModule).where(
             CourseModule.course_id == courses[0].id)).all()
         assert len(modules) == 1
+
+
+def test_postgres_progress_migration_round_trip(postgres_client):
+    """0005 adds evidence without touching 02A/02B tables, and its downgrade is clean."""
+    _, dbmaker, engine = postgres_client
+    configuration = Config("alembic.ini")
+    command.downgrade(configuration, "0004_cohorts_enrollment")
+    remaining = set(inspect(engine).get_table_names())
+    assert "lesson_completion_events" not in remaining
+    assert {"courses", "course_cohorts", "cohort_enrollments"}.issubset(remaining)
+
+    command.upgrade(configuration, "head")
+    tables = set(inspect(engine).get_table_names())
+    assert "lesson_completion_events" in tables
+    assert {"courses", "course_modules", "module_lessons", "cohort_instructors",
+            "cohort_enrollments", "users", "sessions"}.issubset(tables)
