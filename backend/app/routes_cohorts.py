@@ -91,12 +91,12 @@ def describe_cohorts(db: DbSession, cohorts: list[CourseCohort]) -> list[CohortP
             for cohort in cohorts]
 
 
-def enrollment_public(db: DbSession, enrollment: CohortEnrollment) -> EnrollmentPublic:
-    cohort = db.get(CourseCohort, enrollment.cohort_id)
+def enrollment_public(enrollment: CohortEnrollment, student_full_name: str,
+                      course_id: str) -> EnrollmentPublic:
+    """Serialize an administrative enrollment view. The name always comes from ``users``."""
     return EnrollmentPublic(
-        id=enrollment.id, cohort_id=enrollment.cohort_id,
-        course_id=cohort.course_id if cohort else "",
-        student_user_id=enrollment.student_user_id,
+        id=enrollment.id, cohort_id=enrollment.cohort_id, course_id=course_id,
+        student_user_id=enrollment.student_user_id, student_full_name=student_full_name,
         status=enrollment.status,
         enrolled_at=enrollment.enrolled_at, ended_at=enrollment.ended_at)
 
@@ -371,14 +371,20 @@ def list_enrollments(cohort_id: str, status: str | None = None,
                      context: AuthContext = Depends(get_auth_context),
                      db: DbSession = Depends(get_db)):
     authorize(context, CONTENT_MANAGERS)
-    get_cohort(db, cohort_id)
-    query = select(CohortEnrollment).where(CohortEnrollment.cohort_id == cohort_id)
+    cohort = get_cohort(db, cohort_id)
+    # One join supplies every student name, so a page of N enrollments stays one query.
+    query = (select(CohortEnrollment, User.full_name)
+             .join(User, User.id == CohortEnrollment.student_user_id)
+             .where(CohortEnrollment.cohort_id == cohort.id))
     if status:
         query = query.where(CohortEnrollment.status == status)
     query = query.order_by(CohortEnrollment.enrolled_at, CohortEnrollment.id)
-    rows, total = paginate(db, query, limit, offset)
-    return PageEnrollments(items=[enrollment_public(db, row) for row in rows],
-                           limit=limit, offset=offset, total=total)
+    total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
+    rows = db.execute(query.limit(limit).offset(offset)).all()
+    return PageEnrollments(
+        items=[enrollment_public(enrollment, full_name, cohort.course_id)
+               for enrollment, full_name in rows],
+        limit=limit, offset=offset, total=total)
 
 
 @router.post("/admin/cohorts/{cohort_id}/enrollments", response_model=EnrollmentPublic,
@@ -409,7 +415,7 @@ def create_enrollment(cohort_id: str, payload: EnrollmentCreate, request: Reques
           f"Enrolled {target.full_name} in {cohort.code}")
     commit_unique(db, "Student already has an enrollment in this class")
     db.refresh(enrollment)
-    return enrollment_public(db, enrollment)
+    return enrollment_public(enrollment, target.full_name, cohort.course_id)
 
 
 @router.patch("/admin/enrollments/{enrollment_id}", response_model=EnrollmentPublic,
@@ -420,6 +426,10 @@ def update_enrollment(enrollment_id: str, payload: EnrollmentTransition, request
     require_origin(request)
     authorize(context, CONTENT_MANAGERS, sensitive=True)
     enrollment = get_enrollment(db, enrollment_id)
+    cohort = get_cohort(db, enrollment.cohort_id)
+    student = db.get(User, enrollment.student_user_id)
+    if student is None:
+        raise HTTPException(status_code=409, detail="Student account no longer exists")
     target = payload.status.value
     if enrollment.status == target:
         raise HTTPException(status_code=409, detail=f"Enrollment is already {target}")
@@ -428,12 +438,10 @@ def update_enrollment(enrollment_id: str, payload: EnrollmentTransition, request
         enrollment.ended_at = utcnow()
         action = "cohort.enrollment_withdrawn"
     else:
-        cohort = get_cohort(db, enrollment.cohort_id)
         if cohort.status != ACTIVE:
             raise HTTPException(status_code=409,
                                 detail="Only an active class can have enrollments reactivated")
-        user = db.get(User, enrollment.student_user_id)
-        if user is None or not user.is_active or not user.email_verified:
+        if not student.is_active or not student.email_verified:
             raise HTTPException(status_code=409,
                                 detail="Student account must be active and email verified")
         enrollment.status = ENROLLED
@@ -443,7 +451,7 @@ def update_enrollment(enrollment_id: str, payload: EnrollmentTransition, request
     audit(db, context, action, enrollment.cohort_id, f"Enrollment {enrollment.id} -> {target}")
     db.commit()
     db.refresh(enrollment)
-    return enrollment_public(db, enrollment)
+    return enrollment_public(enrollment, student.full_name, cohort.course_id)
 
 
 # ------------------------------------------------------------------------- instructor

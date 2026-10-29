@@ -557,6 +557,7 @@
         "type": "object"
       },
       "EnrollmentPublic": {
+        "description": "Administrative enrollment view. ``student_full_name`` is read-only and server-derived.",
         "properties": {
           "cohort_id": {
             "title": "Cohort Id",
@@ -590,6 +591,10 @@
           "status": {
             "$ref": "#/components/schemas/EnrollmentStatus"
           },
+          "student_full_name": {
+            "title": "Student Full Name",
+            "type": "string"
+          },
           "student_user_id": {
             "title": "Student User Id",
             "type": "string"
@@ -600,6 +605,7 @@
           "cohort_id",
           "course_id",
           "student_user_id",
+          "student_full_name",
           "status",
           "enrolled_at"
         ],

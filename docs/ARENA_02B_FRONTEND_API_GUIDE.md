@@ -76,6 +76,26 @@ never send them.
 | POST | `/admin/cohorts/{cohort_id}/enrollments` | `{"student_user_id": "..."}` | `201 EnrollmentPublic` |
 | PATCH | `/admin/enrollments/{enrollment_id}` | `{"status": "withdrawn" \| "active"}` | `EnrollmentPublic` |
 
+`EnrollmentPublic` (administrative view only):
+
+```json
+{
+  "id": "1f0f…",
+  "cohort_id": "b21c…",
+  "course_id": "9a77…",
+  "student_user_id": "3d5e…",
+  "student_full_name": "Synthetic Learner",
+  "status": "active",
+  "enrolled_at": "2026-10-29T01:00:00Z",
+  "ended_at": null
+}
+```
+
+`student_full_name` is resolved from the user account on every read, so the roster keeps showing
+names after a page reload — do not cache names you collected at enrollment time, and do not send
+this field. Sending it on `POST` is rejected with `422` (unknown field). It contains no email or
+other personal data, and it never appears in the student-facing `/me/enrollments` payloads.
+
 - Enrolling requires an **active** class, an active account, a **verified email** and the Student
   role; otherwise `409`. There is no self-enrollment — an administrator adds the student.
 - Duplicates (`409`, including concurrent double submits) — treat as "already enrolled" and
@@ -108,6 +128,8 @@ Active Student role. Own records only; another student's enrollment id answers `
 
 `StudentEnrollmentPublic` deliberately omits other learners' data and carries only
 `cohort_code`, `cohort_name`, `cohort_status`, `course_code`, `course_title`, `status`, dates.
+It has **no** `student_full_name` and no email: a learner sees only their own records, and the
+administrative name field is not part of that schema.
 
 ## 7. Lesson bodies — the real gate
 
@@ -144,7 +166,8 @@ Important consequences for the UI:
 
 ## 9. Contract notes
 
-- 16 new schemas, 14 new paths, **API 0.4.0**; every pre-existing path and schema is unchanged.
+- 17 new schemas, 14 new paths, **API 0.4.0**; every pre-existing path and schema is unchanged
+  except `EnrollmentPublic`, which gained the additive `student_full_name` field.
 - IDs are plain strings (UUID values) as in 02A.
 - Errors use FastAPI's `detail` shape; `422` for invalid input (including unknown fields),
   `409` for state conflicts, `403` for role/step-up/content gates, `404` where existence is

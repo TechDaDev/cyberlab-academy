@@ -105,10 +105,13 @@ class EnrollmentTransition(CatalogModel):
 
 
 class EnrollmentPublic(BaseModel):
+    """Administrative enrollment view. ``student_full_name`` is read-only and server-derived."""
+
     id: str
     cohort_id: str
     course_id: str
     student_user_id: str
+    student_full_name: str
     status: EnrollmentStatus
     enrolled_at: datetime
     ended_at: datetime | None = None
