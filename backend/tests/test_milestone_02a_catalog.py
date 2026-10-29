@@ -456,7 +456,7 @@ def test_openapi_contract_matches_the_running_application():
                      or path.startswith(("/api/v1/courses/", "/api/v1/admin/modules/",
                                          "/api/v1/admin/lessons/"))}
     assert len(catalog_paths) == 15
-    assert committed["info"]["version"] == "0.4.0"
+    assert committed["info"]["version"] == "0.5.0"
     admin_course = committed["paths"]["/api/v1/admin/courses/{course_id}"]
     assert set(admin_course) == {"get", "patch"}
     assert admin_course["get"]["responses"]["200"]["content"]["application/json"]["schema"][

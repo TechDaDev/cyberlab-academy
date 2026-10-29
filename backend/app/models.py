@@ -293,3 +293,25 @@ class CohortEnrollment(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     cohort: Mapped[CourseCohort] = relationship(back_populates="enrollments")
     student: Mapped[User] = relationship()
+
+
+class LessonCompletionEvent(Base):
+    """Immutable evidence that a student marked one lesson version complete.
+
+    One row per (enrollment, lesson, lesson_version): re-completing an unchanged version reuses
+    the original row, and a later content revision adds a new row instead of erasing the old one.
+    No cascade from enrollments or lessons, so evidence cannot disappear with a future class
+    delete.
+    """
+
+    __tablename__ = "lesson_completion_events"
+    __table_args__ = (
+        UniqueConstraint("enrollment_id", "lesson_id", "lesson_version",
+                         name="uq_lesson_completion_events_version"),
+        CheckConstraint("lesson_version >= 1", name="ck_lesson_completion_events_version"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    enrollment_id: Mapped[str] = mapped_column(ForeignKey("cohort_enrollments.id"), index=True)
+    lesson_id: Mapped[str] = mapped_column(ForeignKey("module_lessons.id"), index=True)
+    lesson_version: Mapped[int] = mapped_column(Integer)
+    completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

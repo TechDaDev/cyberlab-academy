@@ -559,7 +559,7 @@ def test_administrative_enrollments_carry_the_student_name(client, tmp_path):
 def test_openapi_contract_matches_and_stays_additive():
     committed = json.loads(CONTRACT.read_text())
     assert committed == app.openapi()
-    assert committed["info"]["version"] == "0.4.0"
+    assert committed["info"]["version"] == "0.5.0"
     expected = {
         "/api/v1/admin/cohorts", "/api/v1/admin/cohorts/{cohort_id}",
         "/api/v1/admin/cohorts/{cohort_id}/activate",
