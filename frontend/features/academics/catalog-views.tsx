@@ -27,7 +27,20 @@ export function CourseOverviewView({ courseId }: { courseId: string }) {
   return <CourseOverview courseId={courseId} canManage={canManage} />;
 }
 
-export function ModuleExplorerView({ moduleId }: { moduleId: string }) {
+export function ModuleExplorerView({
+  moduleId,
+  enrollmentId = null,
+}: {
+  moduleId: string;
+  /** Echoed from `?enrollmentId=` so lesson links keep the class context. */
+  enrollmentId?: string | null;
+}) {
   const canManage = useCanManage();
-  return <ModuleExplorer moduleId={moduleId} canManage={canManage} />;
+  return (
+    <ModuleExplorer
+      moduleId={moduleId}
+      canManage={canManage}
+      enrollmentId={enrollmentId}
+    />
+  );
 }

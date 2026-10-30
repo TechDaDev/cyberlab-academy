@@ -35,9 +35,16 @@ interface ModulePayload {
 export function ModuleExplorer({
   moduleId,
   canManage,
+  enrollmentId = null,
 }: {
   moduleId: string;
   canManage: boolean;
+  /**
+   * Forwarded from the URL. A student who opened this module from a class keeps
+   * that class on every lesson link, so the lesson viewer has explicit completion
+   * context instead of guessing an enrollment.
+   */
+  enrollmentId?: string | null;
 }) {
   const { data, error, loading, reload } = useApiResource<ModulePayload>(
     async () => {
@@ -150,7 +157,15 @@ export function ModuleExplorer({
                       </div>
                     </div>
                     <Button asChild size="sm" variant="outline" className="shrink-0">
-                      <Link href={`/academics/lessons/${lesson.id}`}>
+                      <Link
+                        href={
+                          enrollmentId
+                            ? `/academics/lessons/${lesson.id}?enrollmentId=${encodeURIComponent(
+                                enrollmentId
+                              )}`
+                            : `/academics/lessons/${lesson.id}`
+                        }
+                      >
                         <span>{canManage ? "Open lesson" : "Lesson details"}</span>
                         <ArrowRight className="h-3.5 w-3.5" />
                       </Link>

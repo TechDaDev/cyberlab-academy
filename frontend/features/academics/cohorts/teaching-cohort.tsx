@@ -26,6 +26,7 @@ import { useApiResource } from "@/features/academics/use-api-resource";
 import { describeCohortError } from "@/features/academics/cohorts/cohort-errors";
 import { EnrollmentStatusBadge, CohortStatusBadge } from "@/features/academics/cohorts/cohort-status-badge";
 import { PaginationBar, SummaryTile } from "@/features/academics/cohorts/cohort-controls";
+import { ClassProgressPanel } from "@/features/academics/progress/class-progress-panel";
 import { academicApi } from "@/lib/api/academic";
 import { cohortsApi } from "@/lib/api/cohorts";
 import type { ModulePublic, PageCourses } from "@/lib/types/academic";
@@ -37,8 +38,9 @@ const ROSTER_PAGE_SIZE = 20;
 /**
  * One assigned class, from the instructor's point of view.
  *
- * Read-only by design: instructors can see the roster and the course curriculum,
- * but cannot publish content or change enrollments. A `404` here means the
+ * Read-only by design: instructors can see the roster, the course curriculum and
+ * the class progress report (`GET /instructor/cohorts/{id}/progress`), but cannot
+ * publish content, change enrollments or alter a student's completion. A `404` here means the
  * assignment is not live (or was removed), which is exactly the state after an
  * assignment is withdrawn, so no cached roster is kept.
  */
@@ -318,14 +320,16 @@ export function TeachingCohort({ cohortId }: { cohortId: string }) {
 
           <Alert variant="info">
             <AlertDescription className="text-xs">
-              Instructors do not have global publish rights, and there is no
-              grading, attendance or progress surface in this milestone. Those
-              capabilities do not exist in the API, so this screen offers none of
+              Instructors do not have global publish rights and cannot record,
+              change or reset a student&rsquo;s completion. Grading, attendance and
+              certificates do not exist in the API, so this screen offers none of
               them.
             </AlertDescription>
           </Alert>
         </div>
       </div>
+
+      <ClassProgressPanel cohortId={cohortId} surface="instructor" />
     </div>
   );
 }

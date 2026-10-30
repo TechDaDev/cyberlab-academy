@@ -17,7 +17,7 @@ import {
 /**
  * Milestone 02B frontend contract guard.
  *
- * `shared-contracts/openapi.json` (API 0.4.0) is authoritative. Endpoints, request
+ * `shared-contracts/openapi.json` (API 0.5.0) is authoritative. Endpoints, request
  * field sets, enum values and bounds are asserted against it so a rename or a
  * narrowed body fails here instead of surfacing as a `404`/`422` in front of an
  * operator managing real classes.
@@ -146,12 +146,17 @@ function resolve(schema: JsonSchema | undefined): JsonSchema | undefined {
   return schema;
 }
 
-describe.skipIf(!contract)("Class API contract alignment (OpenAPI 0.4.0)", () => {
+describe.skipIf(!contract)("Class API contract alignment (OpenAPI 0.5.0)", () => {
   it("targets the documented version and the 02B operation count", () => {
-    expect(contract?.info.version).toBe("0.4.0");
+    // 02C added four progress/completion operations on top of the 02B surface;
+    // those are asserted by `progress-contract.test.ts`, so this guard keeps
+    // counting exactly the class/enrollment operations 02B owns.
+    expect(contract?.info.version).toBe("0.5.0");
     expect(Object.keys(ENDPOINTS)).toHaveLength(19);
-    const documentedPaths = Object.keys(contract?.paths ?? {}).filter((route) =>
-      /cohort|enrollment/.test(route)
+    const documentedPaths = Object.keys(contract?.paths ?? {}).filter(
+      (route) =>
+        /cohort|enrollment/.test(route) &&
+        !/\/progress$|\/completion$/.test(route)
     );
     const documentedOperations = documentedPaths.reduce(
       (total, route) => total + Object.keys(contract!.paths[route]).length,

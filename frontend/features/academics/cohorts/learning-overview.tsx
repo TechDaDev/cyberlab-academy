@@ -27,6 +27,7 @@ import {
   EnrollmentStatusBadge,
 } from "@/features/academics/cohorts/cohort-status-badge";
 import { PaginationBar, SummaryTile } from "@/features/academics/cohorts/cohort-controls";
+import { EnrollmentProgressSummary } from "@/features/academics/progress/enrollment-progress-summary";
 import { cohortsApi } from "@/lib/api/cohorts";
 import type { PageStudentEnrollments } from "@/lib/types/cohorts";
 import { formatShortDate } from "@/lib/utils";
@@ -43,6 +44,9 @@ const PAGE_SIZE = 20;
  */
 export function LearningOverview() {
   const [offset, setOffset] = React.useState(0);
+  // One nonce for every card: "Refresh" re-reads the list *and* each enrollment's
+  // progress in a single gesture. Progress is per enrollment and always re-read.
+  const [progressNonce, setProgressNonce] = React.useState(0);
 
   const { data, error, loading, reload } = useApiResource<PageStudentEnrollments>(
     () => cohortsApi.listOwnEnrollments(PAGE_SIZE, offset),
@@ -64,11 +68,20 @@ export function LearningOverview() {
               My classes
             </CardTitle>
             <CardDescription>
-              Every class you are enrolled in. Lesson content unlocks only while an
-              enrollment is active and its class is active.
+              Every class you are enrolled in, with the progress the API reports for
+              that enrollment. Lesson content unlocks only while an enrollment is
+              active and its class is active.
             </CardDescription>
           </div>
-          <Button type="button" variant="outline" size="sm" onClick={reload}>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              reload();
+              setProgressNonce((nonce) => nonce + 1);
+            }}
+          >
             <RefreshCw className="h-3.5 w-3.5" />
             <span>Refresh</span>
           </Button>
@@ -142,6 +155,10 @@ export function LearningOverview() {
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-3">
+                    <EnrollmentProgressSummary
+                      enrollmentId={entry.id}
+                      refreshNonce={progressNonce}
+                    />
                     {!hasAccess ? (
                       <p className="flex items-start gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-700 dark:text-amber-300">
                         <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />

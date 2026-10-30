@@ -29,6 +29,7 @@ import {
   EnrollmentStatusBadge,
 } from "@/features/academics/cohorts/cohort-status-badge";
 import { SummaryTile } from "@/features/academics/cohorts/cohort-controls";
+import { StudentProgressPanel } from "@/features/academics/progress/student-progress-panel";
 import { academicApi } from "@/lib/api/academic";
 import { cohortsApi } from "@/lib/api/cohorts";
 import type { ModulePublic } from "@/lib/types/academic";
@@ -44,6 +45,10 @@ import { formatShortDate } from "@/lib/utils";
  * renders — no additional guesswork about class status.
  */
 export function StudentEnrollment({ enrollmentId }: { enrollmentId: string }) {
+  // Bumped by "Refresh" so the progress section re-reads the API in the same
+  // gesture as the access record. Progress is never merged from cached values.
+  const [progressNonce, setProgressNonce] = React.useState(0);
+
   const { data, error, loading, reload } = useApiResource<OwnEnrollmentCourse>(
     () => cohortsApi.getOwnEnrollmentCourse(enrollmentId),
     `own-enrollment:${enrollmentId}`
@@ -100,7 +105,15 @@ export function StudentEnrollment({ enrollmentId }: { enrollmentId: string }) {
             <span>Back to my classes</span>
           </Link>
         </Button>
-        <Button type="button" variant="outline" size="sm" onClick={reload}>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            reload();
+            setProgressNonce((nonce) => nonce + 1);
+          }}
+        >
           <RefreshCw className="h-3.5 w-3.5" />
           <span>Refresh access</span>
         </Button>
@@ -160,6 +173,12 @@ export function StudentEnrollment({ enrollmentId }: { enrollmentId: string }) {
         </Alert>
       )}
 
+      <StudentProgressPanel
+        enrollmentId={enrollmentId}
+        canReadLessons={hasAccess}
+        refreshNonce={progressNonce}
+      />
+
       <div className="grid gap-6 lg:grid-cols-12">
         <Card className="lg:col-span-8">
           <CardHeader className="pb-2">
@@ -188,7 +207,9 @@ export function StudentEnrollment({ enrollmentId }: { enrollmentId: string }) {
                 {publishedModules.map((entry) => (
                   <li key={entry.id}>
                     <Link
-                      href={`/academics/modules/${entry.id}`}
+                      href={`/academics/modules/${entry.id}?enrollmentId=${encodeURIComponent(
+                        enrollmentId
+                      )}`}
                       className="flex items-center justify-between gap-2 rounded-lg border border-border/60 bg-surface-elevated/30 px-3 py-2 text-sm text-foreground transition-colors hover:border-cyan-500/40"
                     >
                       <span className="flex min-w-0 items-center gap-2">

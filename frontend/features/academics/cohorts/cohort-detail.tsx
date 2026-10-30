@@ -25,6 +25,7 @@ import { CohortEnrollmentPanel } from "@/features/academics/cohorts/cohort-enrol
 import { CohortInstructorPanel } from "@/features/academics/cohorts/cohort-instructor-panel";
 import { CohortLifecyclePanel } from "@/features/academics/cohorts/cohort-lifecycle-panel";
 import { CohortMetadataForm } from "@/features/academics/cohorts/cohort-metadata-form";
+import { ClassProgressPanel } from "@/features/academics/progress/class-progress-panel";
 import { describeCohortError } from "@/features/academics/cohorts/cohort-errors";
 import { CohortStatusBadge } from "@/features/academics/cohorts/cohort-status-badge";
 import { SummaryTile } from "@/features/academics/cohorts/cohort-controls";
@@ -208,16 +209,21 @@ export function CohortDetail({ cohortId }: { cohortId: string }) {
 
       <CohortEnrollmentPanel cohort={cohort} onCohortChanged={handleCountsChanged} />
 
+      {/* Same component as the instructor surface, against the admin endpoint:
+          read-only class reporting, no fresh step-up needed, no overrides. */}
+      <ClassProgressPanel cohortId={cohort.id} surface="manager" />
+
       <aside className="rounded-xl border border-border/70 bg-surface/40 p-4 text-[11px] leading-relaxed text-muted-foreground">
         <p className="flex items-center gap-1.5 font-medium text-foreground">
           <Users className="h-3.5 w-3.5 text-cyan-400" />
           What this screen does not do
         </p>
         <p className="mt-1">
-          There is no grading, attendance or progress tracking: those capabilities
-          do not exist in the API, and nothing here fabricates them. Class records
-          are never replaced with demonstration data — if the backend is
-          unreachable the screen says so.
+          Progress above is read-only: completion is recorded by the student and a
+          manager cannot mark, edit or reset it, so there is no override control.
+          Grading, attendance and certificates do not exist in the API and are never
+          fabricated here. Class records are never replaced with demonstration data
+          — if the backend is unreachable the screen says so.
         </p>
       </aside>
     </div>

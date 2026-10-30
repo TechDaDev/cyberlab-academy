@@ -26,6 +26,7 @@ import { ErrorState, LoadingState } from "@/components/shared/states";
 import { ContentStatusBadge } from "@/features/academics/content-status-badge";
 import { describeAcademicError } from "@/features/academics/error-message";
 import { Markdown } from "@/features/academics/markdown";
+import { LessonCompletionControl } from "@/features/academics/progress/lesson-completion-control";
 import { useAuth } from "@/hooks/use-auth";
 import { useApiResource } from "@/features/academics/use-api-resource";
 import { academicApi } from "@/lib/api/academic";
@@ -204,7 +205,22 @@ function LessonLocked({
   );
 }
 
-export function LessonViewer({ lessonId }: { lessonId: string }) {
+/**
+ * One lesson body.
+ *
+ * `enrollmentId` comes from the explicit `?enrollmentId=` query parameter that the
+ * class and progress screens put on their lesson links. It is only ever a hint for
+ * which of the student's own enrollments the completion controls should read — the
+ * API still authorises the body and the completion call on its own, and a missing
+ * or foreign id produces no completion control rather than a guess.
+ */
+export function LessonViewer({
+  lessonId,
+  enrollmentId = null,
+}: {
+  lessonId: string;
+  enrollmentId?: string | null;
+}) {
   const { user } = useAuth();
   const { data, error, loading, reload } = useApiResource<LessonDetail>(
     () => academicApi.getLesson(lessonId),
@@ -276,6 +292,10 @@ export function LessonViewer({ lessonId }: { lessonId: string }) {
           </div>
         </CardHeader>
       </Card>
+
+      {user?.active_role === "student" ? (
+        <LessonCompletionControl lessonId={lessonId} enrollmentId={enrollmentId} />
+      ) : null}
 
       <div className="grid gap-6 lg:grid-cols-12">
         <div className="space-y-6 lg:col-span-8">
