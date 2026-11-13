@@ -37,11 +37,16 @@ architecture. Browser-based educational simulation unrelated to Kali remains val
   assignment cannot silently change the maximum score or verification criteria under a student.
 - Only three verification methods exist: flag verification (per-instance derived flags preferred),
   trusted target verification through administrator-approved target profiles, and evidence
-  submission with instructor review.
+  submission with instructor review. Milestone 03A ships flag verification only; the other methods
+  are schema-reserved, disabled, and return `501` until 03C and 03D implement them.
+- Student work is identified by `(enrollment_id, assignment_id)`. A bare challenge id is never
+  actionable, because one challenge may be assigned to several classes and one student may hold
+  several enrollments.
 - The server never executes student commands, never accepts a student-supplied internal URL or host,
   and never allocates a Kali VM per participant.
-- Practical scores derive from authoritative awards plus documented adjustments; no client-supplied
-  total is stored or trusted.
+- Practical scores derive from authoritative awards plus append-only audited adjustments. An
+  adjustment requires an existing award and is rejected, never clamped, when the result would leave
+  `[0, max_points_snapshot]`. No client-supplied total is stored or trusted.
 
 ## Laboratory network
 Training targets run on an isolated laboratory segment with default-deny firewall rules, no route to

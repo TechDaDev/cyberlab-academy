@@ -2,6 +2,8 @@
 
 **Status:** Proposed architecture for review; no route, model, migration or contract in this document is implemented.  
 **Prepared:** 2026-11-12.  
+**Revised:** 2026-11-13 — enrollment-scoped student identity, award-bound adjustments with rejected
+(non-clamped) bounds, 03A/03C/03D method gating, central-target-only profiles, cross-table invariants.  
 **Baseline:** `TechDaDev/cyberlab-academy` `main` at `9afc37fc986e1b530f26c53efa35ecd05c80958c`.  
 **Ownership:** ChatGPT architecture and acceptance; DeepSeek backend/API; Arena AI frontend/UX; Codex independent focused QA.
 
@@ -91,7 +93,7 @@ The proposed names are kept except for two justified additions:
 | `challenge_awards` | kept | Single positive award per instance; DB-enforced uniqueness |
 | `challenge_score_adjustments` | kept | Append-only corrections; scores derived, never overwritten |
 | (new) `challenge_evidence_submissions` | added | File metadata cannot live in an attempt row without losing scan/review state |
-| (new) `challenge_target_profiles` | added | Explicit target allowlist required for trusted-target verification |
+| (new) `challenge_target_profiles` | added | Explicit allowlist for **centrally hosted** training targets; local artifact exercises need no profile |
 
 A version table is not optional. Without it, "instructors cannot silently alter the maximum score of
 an assessment already attempted" is unenforceable.
@@ -206,6 +208,10 @@ Constraints:
 - No cascade delete from `cohort_enrollments` or `challenge_assignments`; a withdrawn class row must
   not erase assessment evidence. Soft state changes instead of deletes.
 - `flag_seed` and any future target credential are never serialized to a student response.
+- The instance's `enrollment_id` must equal the enrollment of the assignment's cohort (C5) and the
+  `challenge_version_id` must equal the assignment's pinned version (C6). Both are resolved
+  server-side at issuance; the student supplies only `enrollment_id` and `assignment_id` in the path,
+  and each is validated against the session user and the assignment's cohort.
 
 ### 4.5 `challenge_attempts`
 
@@ -234,6 +240,11 @@ Constraints:
 - Partial unique index on `(instance_id, client_request_id)` where `client_request_id IS NOT NULL` —
   retry-safe submission.
 - `CHECK attempt_number > 0`; `CHECK verdict IN (...)`.
+- `03A` accepts only `submission_kind = 'flag'`. The `trusted_target` and `evidence` kinds exist for
+  later milestones and are refused with `501` while their methods are disabled.
+- `attempts` and `challenge_score_adjustments` recompute nothing: the effective score is always
+  `sum(awards.points) + sum(adjustments.delta_points)` for the enrollment and version.
+- A `pending_review` verdict may exist only for the evidence method, which is disabled in 03A.
 
 ### 4.6 `challenge_awards`
 
@@ -255,29 +266,38 @@ Constraints:
 - `UNIQUE (enrollment_id, challenge_version_id)` — a reissued instance for the same version cannot
   award points twice (replay protection).
 - `CHECK points >= 0` and `CHECK points <= max_points_snapshot`.
-- Awards are immutable. No update or delete endpoint exists. A zero-point award is permitted only
-  when a challenge is scored entirely through later adjustments, and must be justified in the
-  implementation report.
+- Awards are immutable. No update or delete endpoint exists.
+- `points_policy` is `all_or_nothing` in 03A, so a winning attempt awards the version's `max_points`
+  exactly; a zero-point award is not produced by verification and would require a later, explicitly
+  documented policy change. Every adjustment therefore corrects a positive award.
+- The award service copies `max_points_snapshot` from the instance's pinned version inside the
+  verification transaction, so a later version edit cannot change a historical ceiling.
 
 ### 4.7 `challenge_score_adjustments`
 
 | Column | Type | Notes |
 |---|---|---|
 | `id` | String(36) PK | |
-| `enrollment_id` | FK `cohort_enrollments.id` NOT NULL, indexed | |
-| `challenge_version_id` | FK `challenge_versions.id` NOT NULL, indexed | Adjustment is scoped per assessment |
-| `award_id` | FK `challenge_awards.id` NULL | Null means bonus/penalty without an award |
+| `enrollment_id` | FK `cohort_enrollments.id` NOT NULL, indexed | Must equal the referenced award's enrollment |
+| `challenge_version_id` | FK `challenge_versions.id` NOT NULL, indexed | Must equal the referenced award's version |
+| `award_id` | FK `challenge_awards.id` NOT NULL | **An adjustment always corrects one existing award in 03A** |
 | `delta_points` | Integer ≠ 0 | Append-only delta |
-| `points_before` | Integer | Effective score before the adjustment |
-| `points_after` | Integer | Effective score after the adjustment; must equal `points_before + delta_points` |
-| `reason` | String(500) NOT NULL | Required, non-empty |
+| `points_before` | Integer ≥ 0 | Effective score before the adjustment |
+| `points_after` | Integer ≥ 0 | Effective score after the adjustment; must equal `points_before + delta_points` |
+| `reason` | String(500) NOT NULL | Required, non-empty, non-whitespace |
 | `actor_id` | FK `users.id` NOT NULL | |
 | `actor_role` | String(20) NOT NULL | Active role used for the action |
 | `created_at` | timestamptz | |
 
 Constraints: `CHECK delta_points <> 0`; `CHECK points_after = points_before + delta_points`;
-effective per-version score never below 0 (validated in the same transaction). Every adjustment also
-writes an `audit_events` row in the same transaction.
+`CHECK points_before >= 0`; `CHECK points_after >= 0`. Every adjustment also writes an
+`audit_events` row in the same transaction.
+
+**03A adjustment policy — award required.** An adjustment modifies one existing award and inherits
+its `enrollment_id` and `challenge_version_id`; the application rejects a mismatch rather than
+accepting the values from the request. Standalone bonuses, penalties with no underlying award, and
+broader partial-credit policies are **deferred to Milestone 03E**. A challenge that cannot award
+points through verification has no adjustment path in 03A by design.
 
 ### 4.8 `challenge_evidence_submissions`
 
@@ -301,23 +321,42 @@ writes an `audit_events` row in the same transaction.
 
 ### 4.9 `challenge_target_profiles`
 
+This table governs **centrally hosted training targets only** (Mode B, Milestone 03D). Local
+artifact-based exercises (Mode A) ship a downloadable package and have no addressable network
+target, so a challenge version using `flag` or `evidence` verification leaves `target_profile_id`
+`NULL` and requires no profile row at all.
+
 | Column | Type | Notes |
 |---|---|---|
 | `id` | String(36) PK | |
 | `label` | String(120) | Human name |
-| `mode` | String(20) | `local_lab` or `central_target` |
-| `host` | String(255) | Internal DNS name or address, admin-managed only |
-| `port` | Integer 1..65535 | |
-| `probe_kind` | String(40) | Predefined verifier, e.g. `http_expected_marker`, `tcp_banner` |
-| `expected_value_digest` | String(64) NULL | HMAC of expected marker where applicable |
-| `allowed_paths` | String(500) NULL | Newline-delimited fixed paths for the probe |
-| `isolation_zone` | String(40) | Lab segment identifier |
+| `mode` | String(20) | `central_target`; the only supported mode |
+| `host` | String(255) NULL | Internal DNS name or literal address; administrator-managed, never client-supplied. Required before approval. |
+| `port` | Integer NULL | 1..65535. Required before approval. |
+| `probe_kind` | String(40) NULL | Predefined verifier, e.g. `http_expected_marker`, `tcp_banner`. Required before approval. |
+| `expected_value_digest` | String(64) NULL | HMAC of expected marker. Required for marker-based probes. |
+| `allowed_paths` | String(500) NULL | Newline-delimited fixed paths for HTTP probes. Optional; ignored by non-HTTP probes. |
+| `isolation_zone` | String(40) NULL | Lab segment identifier. Required before approval. |
 | `status` | String(20) | `draft`, `approved`, `retired` |
-| `created_by`, `approved_by` | FK `users.id` | `approved` requires administrator |
+| `created_by` | FK `users.id` | |
+| `approved_by` | FK `users.id` NULL | Administrator who approved; required when `status = 'approved'` |
+| `approved_at` | timestamptz NULL | |
 | `created_at` | timestamptz | |
 
-Profiles are administrator-managed. Instructors select one; they never type a host or URL into an
-assessment. This table is the allowlist that makes SSRF prevention structural.
+Constraints:
+
+- `CHECK mode = 'central_target'`.
+- `CHECK status IN ('draft', 'approved', 'retired')`.
+- `CHECK port IS NULL OR (port >= 1 AND port <= 65535)`.
+- `CHECK (status <> 'approved' OR (host IS NOT NULL AND port IS NOT NULL
+  AND probe_kind IS NOT NULL AND isolation_zone IS NOT NULL AND approved_by IS NOT NULL))`.
+
+A `draft` profile may be created with only `label` and `mode`. Host, port, probe kind and isolation
+zone become mandatory at approval, which is transactional and audited. Only administrators create,
+approve or retire profiles; instructors select an already-approved profile when authoring a
+`trusted_target` version and can never type a destination. This table is the allowlist that makes
+SSRF prevention structural. Profiles are usable only when Milestone 03D enables trusted-target
+verification; a `draft` profile in 03A has no effect.
 
 ### 4.10 Derived score, never stored as a total
 
@@ -326,11 +365,27 @@ For one enrollment:
 ```text
 effective_points(enrollment, challenge_version)
   = coalesce(sum(awards.points), 0) + coalesce(sum(adjustments.delta_points), 0)
+
+valid  <=>  0 <= effective_points <= max_points_snapshot
 ```
 
-`effective_points` is clamped to `[0, max_points_snapshot]`. Challenge totals and course totals are
-computed at read time. No client-supplied total, no persisted aggregate, and no mixing with the
-Milestone 02C lesson-progress percentage.
+**Invariant, not a clamp.** The application rejects any adjustment that would produce
+`effective_points < 0` or `effective_points > max_points_snapshot`. It never silently clamps a total,
+and it never stores a corrected value different from what the operator requested. The check runs
+inside the same transaction that inserts the adjustment, after locking the award row, so concurrent
+adjustments cannot each pass a stale bound check.
+
+- `422 Unprocessable Entity` — the submitted `delta_points` is zero, or the requested
+  `points_before` is outside `[0, max_points_snapshot]`, or the reason is empty.
+- `409 Conflict` — the requested `points_before` is stale, or applying the delta would exceed
+  `[0, max_points_snapshot]` given the current persisted state. The response identifies the
+  bound that was violated (`below_minimum` / `above_maximum`) and the current effective score.
+
+Awards remain immutable. Awards themselves are always within `[0, max_points_snapshot]` because the
+award service copies `max_points_snapshot` from the version at award time. Adjustments are
+append-only and are the only permitted score-change mechanism. Challenge totals and course totals are
+computed at read time. No client-supplied total, no persisted aggregate, and no mixing with the Milestone 02C
+lesson-progress percentage.
 
 ### 4.11 Audit history
 
@@ -344,13 +399,49 @@ as the state change:
 - `challenge.attempt_submitted`, `challenge.attempt_accepted`, `challenge.attempt_rejected`
 - `challenge.award_created`
 - `challenge.score_adjusted` (must include `before`, `after`, `reason`)
-- `challenge.evidence_uploaded`, `challenge.evidence_reviewed`
-- `challenge.target_profile_approved`, `challenge.target_profile_retired`
+- `challenge.evidence_uploaded`, `challenge.evidence_reviewed` (03C)
+- `challenge.target_profile_approved`, `challenge.target_profile_retired` (03D)
+- `challenge.method_enabled`, `challenge.method_disabled` — configuration change with actor and
+  affected method
 
 Never place flags, digests, target credentials or file contents in `audit_events.detail`
 (`String(500)`).
 
-### 4.12 Migration strategy
+### 4.12 Cross-table consistency invariants
+
+These relationships span tables, so a single foreign key cannot express them. Each is enforced by a
+constraint where PostgreSQL allows it and by a transactional application check otherwise. Every
+invariant gets a direct test; a violation must fail closed before commit, never produce a partially
+valid assessment graph.
+
+| # | Invariant | Enforcement |
+|---|---|---|
+| C1 | `challenges.module_id` (when set) belongs to `challenges.course_id` | Application check on create/update inside the transaction; composite FK `(module_id, course_id)` → `course_modules(id, course_id)` where the catalog exposes a matching unique key, otherwise the check plus a test |
+| C2 | `challenge_versions.challenge_id` references the challenge it claims | Plain FK `challenge_versions.challenge_id` → `challenges.id`; the version is always created through the challenge's route, and the service rejects a mismatched `challenge_id` in a body |
+| C3 | `challenge_assignments.challenge_version_id` belongs to `challenge_assignments.challenge_id` | Application check in the assignment transaction; option `CHECK`-backed composite FK `(challenge_version_id, challenge_id)` → `challenge_versions(id, challenge_id)` on a unique index |
+| C4 | `challenge_assignments.cohort_id` is a cohort of the challenge's course | Application check; `CourseCohort.course_id` compared to `Challenge.course_id`. Composite FK `(cohort_id, course_id)` → `course_cohorts(id, course_id)` where available |
+| C5 | `challenge_instances.enrollment_id` belongs to `challenge_instances.assignment_id`'s cohort | Application check on issuance; composite FK `(assignment_id, enrollment_id)` → `challenge_assignments(id, cohort_id)` is not directly expressible, so the service resolves the enrollment's `cohort_id` and the assignment's `cohort_id` and refuses a mismatch (`404`) |
+| C6 | `challenge_instances.challenge_version_id` equals the assignment's pinned version | Application check on issuance; a defensive `CHECK` is not expressible across tables, so the test asserts equality and any later reassignment is refused when attempts exist |
+| C7 | `challenge_attempts.enrollment_id` and `challenge_instances.enrollment_id` are the same enrollment | Application check on submission; the attempt copies the instance's enrollment, never a request value. Option: composite FK `(instance_id, enrollment_id)` → `challenge_instances(id, enrollment_id)` on a unique index |
+| C8 | `challenge_awards.enrollment_id` and `challenge_version_id` match the winning instance and attempt | Application check inside the award transaction; `UNIQUE (instance_id)` already binds one award per instance |
+| C9 | `challenge_score_adjustments.enrollment_id`, `challenge_version_id` and `award_id` all describe the same award | Application check derived from the locked award; the request cannot supply these values |
+| C10 | `challenge_evidence_submissions.enrollment_id` matches its instance | Application check on upload authorization |
+| C11 | A challenge version is immutable once assigned or attempted | Application check on every patch; `409` on violation |
+
+Implementation guidance:
+
+- Prefer composite foreign keys with a unique index when the referenced table can expose the extra
+  key without changing existing catalog tables. The catalog tables are owned by earlier milestones;
+  if adding such a unique index is not additive-safe, use the transactional check and document it.
+- Never accept `enrollment_id`, `challenge_id`, `challenge_version_id`, `assignment_id` or
+  `instance_id` from a student request body as authorization evidence.
+- Perform cross-table reads and the write in one transaction at a consistent isolation level so a
+  concurrent catalog or enrollment edit cannot slip between the check and the insert.
+- A failed consistency check returns `404` for student-facing concealment, or `409`/`422` for
+  authenticated operational errors where the actor legitimately knows the object exists.
+- Cover each invariant with a negative test that asserts no dependent row is written.
+
+### 4.13 Migration strategy
 
 - One additive Alembic revision after the 02C revision, for example `0006_challenge_engine`.
 - `upgrade()` creates the new tables in dependency order: `challenge_target_profiles`, `challenges`,
@@ -363,7 +454,41 @@ Never place flags, digests, target credentials or file contents in `audit_events
 
 ## 5. Verification methods
 
-### 5.1 Flag verification
+### 5.1 Method availability per milestone
+
+Milestone 03A delivers **one operational verification method: flag verification**. The data model
+reserves `trusted_target` and `evidence` so later milestones do not need a destructive migration, but
+an unfinished method must never produce a grade.
+
+Rules for 03A:
+
+- `verification_method` is limited to `flag` for any challenge version that can be published or
+  assigned. A version whose method is not enabled is rejected at publish (`422`) and at assignment
+  (`422`), not silently degraded to another method.
+- Method enablement is server configuration (`CHALLENGE_ENABLED_METHODS`), defaulting to `flag`.
+  Enabling a method is a deliberate release action tied to the milestone that implements it: `evidence`
+  in 03C, `trusted_target` in 03D.
+- If a method is disabled, its routes return `501 Not Implemented` — never `200` with an invented
+  verdict, never a stored award, never a "pending" grade that a student could mistake for success.
+- `challenge_evidence_submissions` and `challenge_target_profiles` may exist and be exercised by
+  tests in 03A, but they are inert without the corresponding enabled method.
+- Test fixtures for 03A use the `flag` method with predetermined fixture instances whose expected
+  values are known to the test only; no additional method is invented for testing. The shipped
+  default configuration exposes flag verification alone, and fixture data is never seeded into a
+  production-like environment or reachable from a student route.
+- The implementation report must state exactly which methods are operational and which are disabled.
+
+Milestone boundaries:
+
+| Milestone | Verification capability | Student experience |
+|---|---|---|
+| 03A | Flag verification operational; other methods disabled | Synthetic fixtures only; no real Kali package |
+| 03C | Local Kali challenge packages, repeatable per-student artifacts, evidence workflow | Complete local-lab exercise |
+| 03D | Operational isolated central targets with trusted target verification | Mode B exercise against a live lab target |
+
+Do not advertise evidence review or target verification as available before 03C/03D respectively.
+
+### 5.2 Flag verification
 
 - Prefer **per-instance derived flags**: expected value is computed as
   `FLAG{base32(HMAC-SHA256(K_flag[v], "instance:" || flag_seed || ":" || challenge_version_id))[:20]}`.
@@ -382,12 +507,64 @@ Never place flags, digests, target credentials or file contents in `audit_events
 - Chaining and sharing are throttled by per-instance attempt limits, per-user rate limits and
   per-instance flags. A shared flag from another student's instance fails.
 
-### 5.2 Trusted target verification
+#### 5.2.1 How 03A and 03C divide flag delivery
+
+**Milestone 03A delivers the verification mechanism, not a usable Kali exercise.** In 03A:
+
+- The server can issue an instance, derive the expected flag from `flag_seed`, and verify a submitted
+  value with the award/idempotency guarantees above.
+- Student responses never include the expected flag, the `flag_seed`, the key generation, the
+  verifier digest, any prefix, or any hint that would let a student derive the flag offline.
+- Automated tests and seeded fixtures use **synthetic fixture flags**: predetermined values in test
+  data whose expected value is known to the test, not to a client. Fixtures must not be reachable
+  from a normal student-facing route and must not be seeded into a production-like environment.
+- A student cannot complete a real exercise in 03A because no artifact embeds a discoverable flag yet.
+  The architecture must not claim otherwise.
+
+**Milestone 03C delivers the discoverable flag** as part of a per-student downloadable package. The
+package-generation flow keeps the secret server-side:
+
+1. The server loads the instance and the challenge version, and derives the expected flag
+   `F = derive(K_flag[v], flag_seed, challenge_version_id)` inside the server process.
+2. The package builder writes `F` into the exercise artifact in the place the scenario requires —
+   for example a file the student must enumerate, a service banner, a database row, a log entry, or
+   a value the student computes from data provided in the artifact.
+3. The builder writes only `F` and the scenario material. It never writes `K_flag`, `flag_seed`,
+   `flag_key_version`, the HMAC of a static flag, another student's instance data, or the derivation
+   inputs. A student who fully reverse-engineers the package learns `F` for **their own** instance and
+   cannot compute anyone else's.
+4. The package is bound to `(assignment_id, enrollment_id)` and downloadable only through an
+   authorized, rate-limited, short-lived route.
+5. Verification compares the submitted value against a freshly derived `F`, so the server stores no
+   plaintext flag at any point.
+6. If the derived flag must change, a new package is generated for the same instance from the same
+   seed — deterministic and repeatable — rather than mutating the instance.
+
+Packages are per-student artifacts, not static course downloads. Two students in the same class
+receive different flags, and a student enrolled in two classes receives two independent instances and
+two different packages. The 03C package must also state that the flag is only meaningful inside the
+authorized exercise.
+
+**Honest limitation of flag-in-package designs.** The flag must be embedded where the exercise is meant
+to reveal it (an enumeration result, a service response, a record, a computed value). Any artifact
+that ships the flag as a readable constant can be grepped without performing the exercise. That is an
+accepted tradeoff for **low-stakes local-lab** challenges, where per-instance derivation prevents
+sharing and the student is only cheating themselves. It is **not** acceptable evidence for an official
+or high-stakes grade: those must use trusted target verification (03D) or instructor-reviewed evidence.
+The 03C package specification must state, per challenge, which of these applies, and the challenge
+authoring guide must not describe a greppable artifact as a secure assessment.
+
+### 5.3 Trusted target verification
+
+Applies to **centrally hosted training targets only** (Mode B). A local artifact exercise has no
+addressable target and never uses this method. The method is disabled in 03A and becomes operational
+in 03D; see 5.1.
 
 - The verifier accepts only `target_profile_id` and a `validation_rule` from the challenge version.
   It never accepts a host, URL, port, path, command or query from a student request.
-- Resolution order: profile row → approved status → assigned isolation zone → profile host/port →
-  fixed probe implementation selected by `probe_kind`.
+- Resolution order: profile row → `approved` status → assigned isolation zone → profile host/port →
+  fixed probe implementation selected by `probe_kind`. A `draft` or `retired` profile fails
+  verification instead of falling back to any other destination.
 - Probes are in-process, declarative and bounded: fixed connect/read timeouts (≤ 5 s), response size
   cap (≤ 64 KiB), no redirect following, no TLS verification bypass, no arbitrary headers.
 - A dedicated verification runner on the laboratory segment performs the egress. The application
@@ -396,8 +573,10 @@ Never place flags, digests, target credentials or file contents in `audit_events
   `169.254.169.254`), multicast, unspecified, and any address outside the approved profile.
 - The student cannot supply the verifier result; only the runner's signed outcome is recorded.
 - Repeated verification of the same instance is idempotent and does not re-award.
+- If the method is disabled, the attempt route returns `501` and creates no award. There is no
+  "optimistic pass" and no pending grade.
 
-### 5.3 Evidence submission
+### 5.4 Evidence submission
 
 - Upload is a two-step flow: create metadata/authorization, then stream the bytes to a dedicated
   storage path. The application never executes, interprets or serves the file inline.
@@ -408,6 +587,8 @@ Never place flags, digests, target credentials or file contents in `audit_events
   per-enrollment authorization and short-lived signed download links.
 - Automated validation may only *flag* plausibility. It never awards full points automatically.
   Instructor acceptance creates the award or adjustment with reason and audit history.
+- Disabled in 03A; operational in 03C. If disabled, the evidence routes return `501` and no
+  `challenge_evidence_submissions` row can be created.
 
 ## 6. API architecture (Milestone 03A proposal, base `/api/v1`)
 
@@ -429,42 +610,96 @@ mutation, and the existing security headers. No GET has side effects. Nothing he
 | POST | `/instructor/challenges/{challenge_id}/assignments` | Instructor, Administrator | Body: `cohort_id`, `challenge_version_id`, optional narrowed window. Live instructor assignment to cohort required. `201`; `409` duplicate; `422` course/version mismatch. |
 | GET | `/instructor/challenges/{challenge_id}/assignments` | Instructor, Administrator | Scoped list. `200`. |
 | POST | `/instructor/challenge-assignments/{assignment_id}/withdraw` | Instructor, Administrator | Soft close; refuses if submission in flight. `200`; `404` out of scope. |
-| GET | `/instructor/cohorts/{cohort_id}/challenges` | Instructor, Administrator | Class challenge list with per-challenge completion and mean score. `404` if not live-assigned. `200`. |
-| GET | `/instructor/cohorts/{cohort_id}/challenges/{challenge_id}/results` | Instructor, Administrator | Paginated per-enrollment rows: attempts used, best verdict, awarded points, adjustment total. No flags. `200`. |
-| GET | `/instructor/cohorts/{cohort_id}/challenges/{challenge_id}/attempts/{attempt_id}` | Instructor, Administrator | Verdict detail, redacted submission digest, evidence metadata. `200`; `404` when the attempt is outside the class. |
-| POST | `/instructor/challenge-awards/{award_id}/adjustments` | Instructor, Administrator | Requires reason; recent privileged reauthentication; records before/after; audit row. `201`; `409` if the requested `points_before` is stale; `422` invalid delta. |
-| GET | `/admin/cohorts/{cohort_id}/challenge-results` | Manager, Administrator | Read-only class challenge statistics, same shape as instructor results. Managers cannot adjust scores. `200`. |
-| POST | `/admin/challenge-target-profiles` | Administrator | Creates a target profile in `draft`. `201`. |
-| POST | `/admin/challenge-target-profiles/{id}/approve` | Administrator | MFA/step-up required; allowlist activation. `200`; `409` already approved. |
-| POST | `/admin/challenge-target-profiles/{id}/retire` | Administrator | Stops future verification use. `200`. |
+| GET | `/instructor/cohorts/{cohort_id}/challenges` | Instructor, Administrator | Class challenge list. One row per **assignment** in that cohort, with `assignment_id`, challenge title, version, completion count and mean score. `404` if not live-assigned. `200`. |
+| GET | `/instructor/challenge-assignments/{assignment_id}/results` | Instructor, Administrator | Paginated per-enrollment rows for that one assignment: attempts used, best verdict, awarded points, adjustment total. `404` when the assignment is outside a live assignment of the caller. Results are assignment-scoped because one challenge may be assigned to several classes or versions. |
+| GET | `/instructor/challenge-assignments/{assignment_id}/attempts/{attempt_id}` | Instructor, Administrator | Verdict detail, redacted submission digest, evidence metadata. `200`; `404` when the attempt belongs to another assignment or class. |
+| POST | `/instructor/challenge-awards/{award_id}/adjustments` | Instructor, Administrator | Requires an existing award inside a live-assigned cohort. Body: `delta_points`, `points_before`, `reason`. Recent privileged reauthentication required. Records before/after and an audit row. `201`; `404` award outside scope; `409` stale `points_before` or the resulting score would leave `[0, max_points_snapshot]`; `422` zero delta, empty reason, or invalid `points_before`. |
+| GET | `/admin/cohorts/{cohort_id}/challenge-results` | Manager, Administrator | Read-only class challenge statistics by assignment, same shape as instructor results. Managers cannot adjust scores. `200`. |
 
 Managers may inspect class-level challenge progress and scoring statistics. Managers may not author,
 assign, verify or adjust challenge results in 03A; a later milestone may widen this after review.
+Score adjustment is out of scope for managers in every 03 milestone unless an explicit later decision
+changes it.
+
+**Target-profile routes are 03D routes.** `POST /admin/challenge-target-profiles`,
+`POST /admin/challenge-target-profiles/{id}/approve` and
+`POST /admin/challenge-target-profiles/{id}/retire` are specified here so the schema is complete, but
+they return `501` in 03A. Approving a profile must never be presented as enabling target verification
+before Milestone 03D ships the runner and the network isolation. Only an administrator may create,
+approve or retire a profile; no instructor or student route accepts a host, address, URL or port.
+
+#### Deferred routes (documented, `501` until their milestone)
+
+| Milestone | Method | Path | Active role | Purpose |
+|---|---|---|---|---|
+| 03D | POST | `/admin/challenge-target-profiles` | Administrator | Create a central-target profile in `draft`. |
+| 03D | POST | `/admin/challenge-target-profiles/{id}/approve` | Administrator | MFA/step-up; makes the profile usable by verification. |
+| 03D | POST | `/admin/challenge-target-profiles/{id}/retire` | Administrator | Stops future verification use; historical attempts keep their outcome. |
+
+No 03D route is mounted-and-enabled before 03D. Returning `501` is mandatory; returning `200` from an
+unimplemented verifier would be a false grade.
 
 ### 6.2 Student
 
+A student route identifies work by **enrollment plus assignment**, never by a bare `challenge_id`.
+The same challenge may be assigned to several classes, and a student may be enrolled in more than one
+of them. Only `(enrollment_id, assignment_id)` identifies one attemptable unit.
+
 | Method | Path | Active role | Authorization and behavior |
 |---|---|---|---|
-| GET | `/me/challenges` | Student | Only assignments for active enrollments in active/scheduled classes within the effective window. Returns assignment summary and instance status. `200`. |
-| GET | `/me/challenges/{challenge_id}` | Student | Instructions, authorized target description, resources, attempt allowance, earned points. **No flag, digest, verifier detail or target credentials.** `200`; `404` when not assigned. |
-| POST | `/me/challenges/{challenge_id}/instance` | Student | Idempotently issues or returns the instance for the caller's enrollment. `201` first issue, `200` existing; `403` inactive enrollment; `409` window closed; `410` instance revoked. |
-| GET | `/me/challenges/{challenge_id}/instance` | Student | Own instance state, attempts used/remaining, deadline. `200`; `404`. |
-| POST | `/me/challenge-instances/{instance_id}/attempts` | Student | Body: `kind` + `flag` or `evidence_submission_id`. Requires `Idempotency-Key`. `201` accepted, `200` replay, `202` pending review, `409` already solved or limit reached, `410` expired/revoked, `422` malformed, `429` throttled. |
-| GET | `/me/challenge-instances/{instance_id}/attempts` | Student | Own attempt history, newest first, paginated. `200`; `404`. |
-| POST | `/me/challenge-instances/{instance_id}/evidence` | Student | Metadata + upload authorization for evidence method. `201`; `413` too large; `415` unsupported format; `429`; `503` scanner unavailable. |
-| GET | `/me/enrollments/{enrollment_id}/challenge-scores` | Student owner | Per-challenge awards, adjustments, derived totals, attempt counts. `200`; `404` for another enrollment. |
-| GET | `/me/challenge-resources/{resource_id}` | Student | Issues a short-lived signed download for an assigned resource. `200`; `404` when not assigned; `429` abusive download rate. |
+| GET | `/me/enrollments/{enrollment_id}/challenges` | Student owner | Assignments visible for exactly that enrollment: active/scheduled class, effective window, published version. Returns `assignment_id`, `challenge_id`, per-assignment instance status and points. `200`; `404` when the enrollment is not the caller's. |
+| GET | `/me/challenge-assignments/{assignment_id}` | Student owner | Instructions, authorized target description, resources, attempt allowance, earned points, and the owning `enrollment_id`. **No flag, digest, verifier detail or target credentials.** `200`; `404` when the assignment does not belong to an active enrollment of the caller. |
+| POST | `/me/enrollments/{enrollment_id}/challenge-assignments/{assignment_id}/instance` | Student owner | Idempotently issues or returns the instance for exactly this enrollment and assignment. `201` first issue, `200` existing; `403` inactive enrollment; `404` when the assignment is not in this enrollment's cohort; `409` window closed or challenge not assigned to that cohort; `410` instance revoked. |
+| GET | `/me/enrollments/{enrollment_id}/challenge-assignments/{assignment_id}/instance` | Student owner | Own instance state, attempts used/remaining, deadline. `200`; `404`. |
+| POST | `/me/challenge-instances/{instance_id}/attempts` | Student owner | Body: `kind` + `flag` or `evidence_submission_id`. Instance ownership is resolved from the instance row, not from the request. Requires `Idempotency-Key`. `201` accepted, `200` replay, `202` pending review (03C), `409` already solved or limit reached, `410` expired/revoked, `422` malformed, `429` throttled, `501` method not enabled. |
+| GET | `/me/challenge-instances/{instance_id}/attempts` | Student owner | Own attempt history, newest first, paginated. `200`; `404`. |
+| POST | `/me/challenge-instances/{instance_id}/evidence` | Student owner | Metadata + upload authorization for the evidence method (03C). `201`; `413` too large; `415` unsupported format; `429`; `501` method not enabled; `503` scanner unavailable. |
+| GET | `/me/enrollments/{enrollment_id}/challenge-scores` | Student owner | Per-challenge awards, adjustments, derived totals, attempt counts for that enrollment only. `200`; `404` for another enrollment. |
+| GET | `/me/enrollments/{enrollment_id}/challenge-resources/{resource_id}` | Student owner | Short-lived signed download for a resource assigned to that enrollment (03C). `200`; `404` when not assigned or wrong enrollment; `429` abusive download rate. |
+
+**Enrollment and assignment resolution rules.** The server derives the caller from the session, then:
+
+1. Loads the enrollment and requires `student_user_id == session user`; otherwise `404`. Never
+   returns `403` for someone else's enrollment.
+2. Loads the assignment and requires `assignment.cohort_id == enrollment.cohort_id`. An assignment in
+   another class, even for the same course and same challenge, is `404`.
+3. Requires the enrollment to be `active` and the cohort to be `active` or `scheduled`.
+4. Never "picks the first matching enrollment". A given `(enrollment_id, assignment_id)` pair resolves
+   to at most one instance; if the pair is valid but the student is also enrolled elsewhere, that
+   other enrollment is a separate scope with separate instances, attempts and awards.
+5. `GET /me/challenge-assignments/{assignment_id}` may omit `enrollment_id` in the path because the
+   existing `UNIQUE (cohort_id, student_user_id)` constraint guarantees at most one enrollment per
+   student per cohort, so an assignment maps to at most one of the caller's enrollments. The response
+   still returns `enrollment_id`, and a zero-match lookup is `404`. Every route that creates or reads
+   mutable per-student state (instance issuance, instance read, attempts, scores) carries
+   `enrollment_id` explicitly.
+
+Convenience aggregate routes are additive only and must not weaken the above:
+
+- `GET /me/challenges` MAY list assignments across all of the caller's active enrollments, but every
+  row MUST include `enrollment_id` and `assignment_id`. The route must not imply that a challenge
+  identifier alone is actionable.
+- There is no `GET /me/challenges/{challenge_id}` and no
+  `POST /me/challenges/{challenge_id}/instance`. A challenge identifier alone is ambiguous and would
+  force the backend to guess an enrollment, which is prohibited.
 
 ### 6.3 Request validation and response rules
 
 - Pydantic models with `extra="forbid"`; reject client-supplied `points`, `score`, `verdict`,
   `enrollment_id`, `user_id`, `challenge_version_id`, `instance_id` (in a body), timestamps and
-  `attempt_number`.
+  `attempt_number`. Path parameters are identifiers, never authorization evidence.
+- A student path containing `enrollment_id` must be checked against the session user's own
+  enrollment. A student path containing `assignment_id` must be checked against that enrollment's
+  cohort. Supplying a valid identifier never substitutes for the ownership check.
 - Effective score payloads always expose integer `awarded_points`, `adjustment_points`,
   `effective_points`, `max_points` and never a client-derived percentage alone.
 - Authorization failures for foreign resources return `404`, not `403`, to conceal existence.
-  Legitimate state conflicts (`409`), expired instances (`410`), throttling (`429`) are documented
-  and tested.
+  Legitimate state conflicts (`409`), expired instances (`410`), throttling (`429`) and disabled
+  methods (`501`) are documented and tested.
+- Score adjustments are validated, not clamped: `422` for zero delta, empty reason, or invalid
+  `points_before`; `409` when the requested `points_before` is stale or the resulting score would
+  leave `[0, max_points_snapshot]`. The response names the violated bound and the current effective
+  score; it never returns a silently corrected total.
 - Every mutation requires same-origin validation. Score adjustments additionally require recent
   privileged reauthentication.
 - `Cache-Control: no-store`, `Referrer-Policy: no-referrer` on challenge responses.
@@ -475,13 +710,31 @@ assign, verify or adjust challenge results in 03A; a later milestone may widen t
 
 Verification transaction:
 
-1. Load instance `FOR UPDATE` (PostgreSQL); verify enrollment/ownership/window/attempt limit.
+1. Load instance `FOR UPDATE` (PostgreSQL); verify enrollment/ownership/window/attempt limit, and
+   that the attempt's `enrollment_id` matches the instance.
 2. Insert attempt row with server time and next `attempt_number`.
-3. Verify.
-4. If accepted, insert award; a `UNIQUE (instance_id)` violation means another request already
-   awarded — roll back this transaction, re-read the award, and return the original result.
+3. Verify with the enabled method only. A disabled method aborts before any award with `501`.
+4. If accepted, insert award copying `max_points_snapshot` from the instance's version; a
+   `UNIQUE (instance_id)` violation means another request already awarded — roll back this
+   transaction, re-read the award, and return the original result.
 5. Set instance status `solved` and `solved_at` once.
 6. Audit and commit.
+
+Adjustment transaction:
+
+1. Load the award `FOR UPDATE`; verify the award's enrollment belongs to a cohort the actor is
+   currently assigned to (instructor) or any cohort (administrator).
+2. Verify that the award's enrollment and version match the adjustment targets (C9).
+3. Compute `current_effective = sum(awards.points) + sum(adjustments.delta_points)` for that
+   enrollment and version under the lock.
+4. Require `request.points_before == current_effective`; otherwise `409` stale.
+5. Require the reason to be non-empty after trimming; otherwise `422`.
+6. Require `0 <= current_effective + delta_points <= max_points_snapshot`; otherwise `409` with the
+   violated bound. **Do not clamp and do not persist a corrected value.**
+7. Insert the adjustment, set `points_before`/`points_after`, write the audit row, commit.
+
+Both transactions are serialized per instance/award by the row lock, so two concurrent requests
+cannot each observe the same `points_before` and commit conflicting results.
 
 `Idempotency-Key` replay returns the stored attempt result without a new attempt row. A repeated
 successful flag never creates a second award or a second audit event. Unrelated integrity errors are
@@ -491,18 +744,25 @@ not swallowed.
 
 | Capability | Student | Instructor | Manager | Administrator |
 |---|---|---|---|---|
-| Read own assignments, instance, attempts, scores | own enrollment only | no (student routes) | no | no |
-| Submit attempt | own active enrollment | no | no | no |
+| List challenge assignments for an enrollment | own enrollment only | no (student routes) | no | no |
+| Read one challenge assignment | own enrollment, matching cohort | no | no | no |
+| Issue/read instance | own enrollment + assignment in that cohort | no | no | no |
+| Submit attempt | own instance, own active enrollment | no | no | no |
+| Read own attempt history and scores | own enrollment only | no | no | no |
+| Download own challenge resource (03C) | own enrollment + assignment | no | no | no |
 | Create/edit draft challenge | no | live-assigned course | no | yes |
 | Publish version | no | live-assigned course | no | yes |
-| Assign to class | no | live-assigned cohort | no | yes |
-| Read class challenge results | no | live-assigned cohort | yes, read-only | yes |
-| Adjust score | no | live-assigned cohort + step-up | no | yes + step-up |
-| Manage target profiles | no | no | no | yes + MFA |
-| Withdrawn enrollment / removed instructor | existing history only | access ends next request | existing history | existing history |
+| Assign published version to a class | no | live-assigned cohort | no | yes |
+| Read class challenge results | no | live-assigned cohort, by assignment | read-only, by assignment | yes |
+| Adjust an existing award | no | live-assigned cohort + step-up | no | yes + step-up |
+| Create standalone bonus/penalty (no award) | no | deferred to 03E | no | deferred to 03E |
+| Manage central target profiles (03D) | no | no | no | yes + MFA |
+| Withdrawn enrollment / removed instructor | own history only, no new attempts | access ends next request | existing history | existing history |
 
 Role is never sufficient on its own: every request re-validates enrollment status, cohort status,
-live instructor assignment and challenge scope.
+live instructor assignment, assignment-to-cohort membership and challenge scope. A student identifier
+supplied by the client is only a lookup key; the authoritative ownership comes from the session plus
+the enrollment row.
 
 ## 8. Performance and capacity
 
@@ -545,28 +805,58 @@ Design targets: 50 registered participants, ~50 concurrent authenticated submiss
    event; original `awarded_at` preserved.
 6. Wrong flag, shared foreign-instance flag, malformed payload, and over-limit attempts rejected
    uniformly without leaking expected values.
-7. Trusted-target SSRF matrix: user-supplied host/URL ignored or rejected; non-approved profile,
-   loopback, link-local and metadata addresses blocked; timeout enforced.
-8. Evidence upload rejects oversized and disallowed types; stored outside web root; unscanned files
-   are not readable by instructors; no automatic full award.
-9. Authorization matrix tests: student-to-student, instructor-to-unassigned-class, manager write
-   attempts, administrator step-up, withdrawn enrollment, removed instructor.
-10. Adjustment preserves `points_before`, `points_after`, reason, actor, timestamp and audit row;
-    stale `points_before` produces `409`.
-11. Foreign resource IDs return `404`; rate limits return `429`; Origin/CSRF enforcement on all
+7. **Enrollment-scoped student identity:** for a student enrolled in two classes of the same course
+   with the same challenge assigned to both,
+   - `POST /me/enrollments/{A}/challenge-assignments/{assignment_in_B}/instance` returns `404`;
+   - each enrollment gets its own instance, attempt count and score summary;
+   - omitting `enrollment_id` from a student path is impossible; there is no route that resolves the
+     "first" enrollment;
+   - a second student's `enrollment_id` and a second student's `assignment_id` both return `404`;
+   - the aggregate `GET /me/challenges` row for each assignment carries its own `enrollment_id` and
+     `assignment_id`.
+8. **Cross-table invariants C1–C11:** each has a negative test asserting no dependent row is written
+   (module from another course, version from another challenge, assignment version mismatch, cohort of
+   another course, enrollment outside the assignment's cohort, instance version drifting from the
+   pinned version, attempt/award/adjustment enrollment or version mismatch).
+9. **Adjustment validation, not clamping:** `delta_points` that would take the effective score below
+   `0` or above `max_points_snapshot` returns `409` with the violated bound and no row is written;
+   zero delta and empty reason return `422`; stale `points_before` returns `409`; a valid adjustment
+   preserves `points_before`, `points_after`, reason, actor, timestamp and audit row; the effective
+   score is never silently corrected.
+10. **Award-required adjustments:** an adjustment against a nonexistent award returns `404`; an award
+    outside the instructor's live-assigned cohort returns `404`; there is no endpoint that creates a
+    standalone bonus or penalty; an adjustment cannot reference an award from another enrollment or
+    version.
+11. **Method enablement:** a version configured with `evidence` or `trusted_target` while the method
+    is disabled is refused at publish and at assignment (`422`); attempting a disabled method returns
+    `501` and creates no award; no route returns a successful grade for an unimplemented method; the
+    shipped default configuration exposes only `flag`.
+12. **Flag non-exposure in 03A:** no student response contains `flag_seed`, key generation, verifier
+    digest, expected flag or prefix; synthetic fixture flags are not reachable from a student route.
+13. Trusted-target SSRF matrix (03D): user-supplied host/URL ignored or rejected; non-approved
+    profile, loopback, link-local and metadata addresses blocked; timeout enforced.
+14. Evidence upload (03C) rejects oversized and disallowed types; stored outside web root; unscanned
+    files are not readable by instructors; no automatic full award.
+15. Authorization matrix tests: student-to-student, instructor-to-unassigned-class, manager write
+    attempts, administrator step-up, withdrawn enrollment, removed instructor.
+16. Foreign resource IDs return `404`; rate limits return `429`; Origin/CSRF enforcement on all
     mutations.
-12. 50-concurrent-submission load test with p95 and error-rate report.
-13. Contract parity: generated OpenAPI matches committed contract after implementation (Codex check).
+17. 50-concurrent-submission load test with p95 and error-rate report, asserting zero duplicate
+    awards and zero duplicate audit rows.
+18. Contract parity: generated OpenAPI matches committed contract after implementation (Codex check).
 
 ## 11. Unresolved architectural decisions
 
 1. Per-instance derived flags vs. static verifier digests for local-lab challenges with fixed
-   offline artifacts. Recommendation: derived flags with a downloadable per-student artifact that
-   embeds the flag.
+   offline artifacts. Resolved direction: per-instance derived flags; 03C generates the per-student
+   package that embeds the discoverable flag (5.2.1). The remaining open question is only whether any
+   challenge may use a static digest, and under what approval.
 2. Evidence storage backend: local encrypted volume vs. S3-compatible object storage (MinIO).
-   Recommendation: object storage with private bucket and signed URLs; confirm backup policy.
-3. Whether managers may ever adjust scores (currently administrator/instructor only).
-4. Partial-credit policy semantics for evidence review and multi-part challenges.
+   Recommendation: object storage with private bucket and signed URLs; confirm backup policy. (03C)
+3. Whether managers may ever adjust scores. Current decision: no in 03A; a change requires an
+   explicit, documented decision.
+4. Partial-credit policy semantics for evidence review and multi-part challenges — deferred to 03E.
+   Standalone bonuses and penalties without an award are also 03E.
 5. Gradebook integration with Moodle (03E): one-way export, formula ownership and audit.
 6. Proctoring/identity assurance when the student's Kali installation is untrusted; how much weight
    official assessment may place on local work.
@@ -576,3 +866,6 @@ Design targets: 50 registered participants, ~50 concurrent authenticated submiss
 9. Retention period for attempts, flags digests, evidence files and audit rows.
 10. Whether class challenge results must be visible to managers across all classes or only assigned
     ones.
+11. Whether a challenge may be assigned twice to the same cohort under two different versions. The
+    schema permits it (`UNIQUE (challenge_version_id, cohort_id)`); product policy does not yet say
+    whether that is desirable, so results are reported per assignment.

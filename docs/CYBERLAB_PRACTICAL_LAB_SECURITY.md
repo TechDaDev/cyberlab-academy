@@ -2,6 +2,8 @@
 
 **Status:** Proposed architecture for review; no control described here is implemented by this document.  
 **Prepared:** 2026-11-12.  
+**Revised:** 2026-11-13 — aligned with enrollment-scoped student routes, award-bound adjustments,
+rejected score bounds, central-target-only profiles and verification-method gating.  
 **Baseline:** `TechDaDev/cyberlab-academy` `main` at `9afc37fc986e1b530f26c53efa35ecd05c80958c`.  
 **Applies to:** Milestones 03A–03E (challenge engine, evidence handling, isolated training targets).
 
@@ -48,7 +50,9 @@ Acceptable mitigation, from weakest to strongest:
 2. Evidence submission reviewed by an instructor (supports corrections, not certainty).
 3. **Randomized per-instance flags** derived from a server secret and instance seed, which cannot be
    obtained without interacting with the assigned task instance (or receiving one from a classmate,
-   which rate limits and per-instance derivation make detectable and non-transferable).
+   which rate limits and per-instance derivation make detectable and non-transferable). The flag
+   becomes discoverable only through the per-student package delivered in Milestone 03C; 03A verifies
+   the flag but ships no usable exercise artifact.
 4. **Trusted central target verification** (03D), where a server component observes the target's
    real state and the student cannot influence the verifier.
 
@@ -63,11 +67,14 @@ Each threat lists the primary controls. "Residual risk" is what remains after 03
 
 - **Risk:** one student solves and shares the flag with classmates.
 - **Controls:** per-instance derived flags (`HMAC(server key, instance seed + challenge version)`);
-  static flags only as a documented last resort, stored as HMAC digests; per-instance attempt limits;
-  per-user and per-instance rate limits; award evidence records the winning instance.
+  the 03C package builder writes only the derived flag for that one instance into the artifact and
+  never writes the key, the seed, the key generation or another instance's data; static flags only as
+  a documented last resort, stored as HMAC digests; per-instance attempt limits; per-user and
+  per-instance rate limits; award evidence records the winning instance.
 - **Residual:** collusion where a student submits another student's flag is rejected because flags
-  are instance-bound. A student may still be walked through the solution verbally; trusted target
-  verification or randomized parameters reduce this.
+  are instance-bound and a package dump reveals only the student's own flag. A student may still be
+  walked through the solution verbally; trusted target verification or randomized parameters reduce
+  this. In 03A there is no distributable artifact at all, so a real exercise cannot yet be shared.
 
 ### T2 — Attempt flooding and brute-force submissions
 
@@ -85,15 +92,18 @@ Each threat lists the primary controls. "Residual risk" is what remains after 03
   `UNIQUE (enrollment_id, challenge_version_id)` prevents a reissued instance from re-awarding;
   partial unique index for a single accepted attempt; transactional `FOR UPDATE` on the instance;
   `Idempotency-Key` replay returns the original result; unique conflict is handled as idempotent
-  success, not a 500.
+  success, not a 500. Adjustments always reference one existing award, so there is no second
+  award-creation path and no standalone bonus endpoint in 03A.
 - **Residual:** none identified in the designed model; concurrency tests on PostgreSQL are mandatory.
 
 ### T4 — Unauthorized access to another student's results
 
 - **Risk:** guessed or enumerated IDs expose attempts, evidence or scores.
-- **Controls:** every student route derives `student_user_id` from the session, resolves
-  `enrollment_id` server-side, and verifies ownership; foreign IDs return `404`; opaque UUID keys;
-  pagination bounded; no student identifiers in another student's payload; `Cache-Control: no-store`.
+- **Controls:** every student route derives `student_user_id` from the session, requires an explicit
+  `enrollment_id` in the path for discovery, assignment details and instance issuance, and verifies
+  that the assignment belongs to that enrollment's cohort; the server never selects the first matching
+  enrollment. Foreign IDs return `404`; opaque UUID keys; bounded pagination; no other student's
+  identifiers in a payload; `Cache-Control: no-store`; one authorization failure body shape.
 - **Residual:** none in the designed model; covered by authorization tests.
 
 ### T5 — Instructor access to unrelated classes
@@ -101,9 +111,12 @@ Each threat lists the primary controls. "Residual risk" is what remains after 03
 - **Risk:** an instructor reads or modifies another class's challenges or scores.
 - **Controls:** live assignment check (`cohort_instructors.removed_at IS NULL`) on every request;
   scope by `cohort_id`, never by `course_id` alone; instructor-authored challenges limited to courses
-  with a live assignment; class result reads require the exact cohort match; removal revokes access
-  on the next request.
-- **Residual:** an instructor legitimately assigned to two classes may compare them; acceptable.
+  with a live assignment; class result reads are assignment-scoped and require the exact cohort match
+  for that assignment; score adjustments require the award's enrollment to be in a live-assigned
+  cohort; removal revokes access on the next request.
+- **Residual:** an instructor legitimately assigned to two classes may compare them; acceptable. An
+  instructor who is removed mid-term may already have read data; `no-store` and the audit trail limit
+  the impact.
 
 ### T6 — Manipulation of challenge scoring criteria
 
@@ -112,7 +125,9 @@ Each threat lists the primary controls. "Residual risk" is what remains after 03
 - **Controls:** immutable `challenge_versions`; attempts and awards reference the exact version;
   published versions cannot be patched; editing creates a new version; assignments pin a version;
   moving an assignment to a new version is refused once attempts exist; adjustments are the only
-  permitted score change and require reason, actor and audit.
+  permitted score change, must target an existing award, and require reason, actor and audit.
+  An adjustment that would leave `[0, max_points_snapshot]` is rejected, so a grading criterion
+  cannot be bypassed by inflating a total.
 - **Residual:** administrators can still create a new version; existing attempts remain scored under
   their original version by design.
 
@@ -124,8 +139,18 @@ Each threat lists the primary controls. "Residual risk" is what remains after 03
   credentials excluded from all Pydantic response models; submission values stored only as HMAC
   digests; audit detail excludes secrets; error responses use bounded reason codes; constant-time
   comparison; application logs redact submission payloads.
+- **Package boundary (03C):** the per-student package contains only that instance's derived flag and
+  scenario material. It must never contain the server key, `flag_seed`, `flag_key_version`, another
+  instance's data, or a derivation routine that reconstructs other students' flags. Package
+  generation runs server-side, and the package is downloadable only through an authorized,
+  rate-limited route. A student dumping their own package learns their own flag, which is the intended
+  design.
 - **Residual:** a database compromise exposes digests and seeds; key rotation and database
-  confidentiality (encryption at rest, restricted roles) are deployment requirements.
+  confidentiality (encryption at rest, restricted roles) are deployment requirements. A leaked
+  package reveals one flag for one instance; it cannot be replayed by another student. A student can
+  also read their own flag without performing the exercise when the artifact embeds it as a readable
+  value; per-instance derivation prevents sharing but not self-cheating, which is why official
+  grades require trusted target verification or reviewed evidence (see 2.1).
 
 ### T8 — Malicious file uploads
 
@@ -142,12 +167,15 @@ Each threat lists the primary controls. "Residual risk" is what remains after 03
 
 - **Risk:** a student or instructor supplies a host/URL that makes the server reach internal
   services.
-- **Controls:** no destination input exists in any student request; destinations come only from
-  administrator-approved `challenge_target_profiles`; DNS/IP allowlist; loopback, link-local
-  (including cloud metadata), multicast and unspecified addresses denied; fixed probe kinds only;
-  bounded timeouts and response sizes; redirects disabled; credentials never returned.
+- **Controls:** profiles describe **central targets only**; a local artifact exercise has no
+  addressable destination and needs no profile; no destination input exists in any student or
+  instructor request; destinations come only from administrator-approved `challenge_target_profiles`;
+  a `draft` or `retired` profile fails closed instead of falling back; DNS/IP allowlist; loopback,
+  link-local (including cloud metadata), multicast and unspecified addresses denied; fixed probe kinds
+  only; bounded timeouts and response sizes; redirects disabled; credentials never returned.
 - **Residual:** a compromised approved target could answer misleadingly; verification must compare
-  against an expected digest, not mere reachability.
+  against an expected digest, not mere reachability. Until 03D ships the runner, the method is
+  disabled and attempts return `501` rather than a guessed verdict.
 
 ### T10 — Unauthorized scanning of college infrastructure
 
@@ -172,10 +200,12 @@ Each threat lists the primary controls. "Residual risk" is what remains after 03
 ### T12 — Grade changes without audit history
 
 - **Risk:** silent modification of a student's practical score.
-- **Controls:** awards immutable; adjustments append-only with `points_before`, `points_after`,
-  reason, actor, active role and timestamp; `audit_events` row in the same transaction; recent
-  privileged reauthentication for adjustments; stale `points_before` produces `409`; no client-set
-  totals; no bulk silent update endpoint.
+- **Controls:** awards immutable; adjustments append-only and always bound to one existing award with
+  `points_before`, `points_after`, reason, actor, active role and timestamp; `audit_events` row in the
+  same transaction; recent privileged reauthentication for adjustments; stale `points_before` produces
+  `409`; out-of-range results are rejected rather than clamped, so the stored total always equals the
+  requested arithmetic; no client-set totals; no bulk silent update endpoint; no standalone bonus or
+  penalty path in 03A.
 - **Residual:** database-level tampering with DB administrator access; restrict DB credentials and
   retain external backups/audit shipping.
 
@@ -183,9 +213,11 @@ Each threat lists the primary controls. "Residual risk" is what remains after 03
 
 - **Risk:** an old successful submission, instance or token is reused.
 - **Controls:** instance-bound flags; unique accepted attempt; unique award per
-  `(enrollment_id, challenge_version_id)`; instance status transitions are one-way; expired/revoked
-  instances reject submissions with `410`; idempotency keys are scoped to the instance and expire;
-  signed download links are short-lived and single-purpose.
+  `(enrollment_id, challenge_version_id)`; instance and attempt rows are bound to one enrollment, so a
+  replay from another class or another student fails the ownership check before verification; instance
+  status transitions are one-way; expired/revoked instances reject submissions with `410`; idempotency
+  keys are scoped to the instance and expire; signed download links are short-lived and single-purpose
+  and bound to `(enrollment_id, assignment_id)`.
 - **Residual:** none designed; verified by replay tests.
 
 ### T14 — Unauthorized access after enrollment withdrawal or instructor removal
@@ -194,7 +226,9 @@ Each threat lists the primary controls. "Residual risk" is what remains after 03
 - **Controls:** authorization re-checks live enrollment/assignment on every request, not cached in
   the session; active-role requirement; withdrawn enrollment loses write access immediately and keeps
   read-only history only where explicitly permitted; removed instructor loses class access on the
-  next request; role deactivation ends access; no long-lived tokens.
+  next request; role deactivation ends access; no long-lived tokens. After withdrawal, the enrollment
+  row still owns its historical instances and awards, but no new instance can be issued and no attempt
+  can be submitted for that enrollment.
 - **Residual:** an already-open browser tab can display cached data it fetched earlier; `no-store` and
   short-lived responses reduce exposure.
 
@@ -221,6 +255,13 @@ Each threat lists the primary controls. "Residual risk" is what remains after 03
   duplicate-award conflicts, probe failures and cross-segment denies.
 - **Retention:** attempts, digests, evidence and audit rows retained per institutional policy;
   evidence deletion is audited and requires administrator action.
+- **Method gating:** a verification method that is not implemented in the running milestone is
+  disabled by configuration. Its routes return `501`, create no attempt verdict and no award, and are
+  never presented as operational in UI, documentation or OpenAPI summaries. Enabling `evidence` in
+  03C or `trusted_target` in 03D is an explicit release action with its own review.
+- **Milestone 03A scope:** the challenge engine verifies flags and records audited scores. It ships no
+  usable Kali exercise artifact, no evidence pipeline and no live training target. Testing uses
+  synthetic fixture flags that are unreachable from student routes.
 
 ## 5. Isolated laboratory network design (03D)
 
