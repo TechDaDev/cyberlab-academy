@@ -4,6 +4,9 @@
 **Prepared:** 2026-11-12.  
 **Revised:** 2026-11-13 — enrollment-scoped student identity, award-bound adjustments with rejected
 (non-clamped) bounds, 03A/03C/03D method gating, central-target-only profiles, cross-table invariants.  
+**Revised again:** 2026-11-13 — cohort status corrected to the existing four-value lifecycle with an
+assignment-window policy for scheduling; separate Instructor and Administrator authorization paths;
+03B limited to the flag method actually implemented in 03A.  
 **Baseline:** `TechDaDev/cyberlab-academy` `main` at `9afc37fc986e1b530f26c53efa35ecd05c80958c`.  
 **Ownership:** ChatGPT architecture and acceptance; DeepSeek backend/API; Arena AI frontend/UX; Codex independent focused QA.
 
@@ -178,11 +181,17 @@ Immutability rule (enforced in the service layer and by tests, not by a trigger 
 | `assigned_by` | FK `users.id` | |
 | `assigned_at` | timestamptz | |
 | `availability_starts_at`, `availability_ends_at` | timestamptz NULL | Effective window; may only narrow the version window |
-| `status` | String(20) | `scheduled`, `active`, `closed`, `withdrawn` |
+| `status` | String(20) | Assignment status: `scheduled`, `active`, `closed`, `withdrawn`. **Not** the cohort lifecycle. |
 | `closed_at`, `closed_by` | | |
 
 Constraints: `UNIQUE (challenge_version_id, cohort_id)`; `CHECK status IN (...)`; the assignment's
 challenge course must equal the cohort course (validated server-side, covered by a test).
+
+`challenge_assignments.status` is **not** the cohort lifecycle. `CourseCohort.status` keeps its
+existing four values (`draft`, `active`, `completed`, `archived`) and is unchanged by Milestone 03. A
+`scheduled` assignment inside an `active` cohort is normal; an assignment in `scheduled`,
+`active` or any other state inside a `draft`, `completed` or `archived` cohort authorizes no student
+work. See 6.2.1 for the effective policy.
 
 ### 4.4 `challenge_instances`
 
@@ -598,28 +607,50 @@ mutation, and the existing security headers. No GET has side effects. Nothing he
 
 ### 6.1 Instructor and administrator
 
+**Two independent authorization paths reach the `/instructor/*` routes.** They are never mixed:
+
+| Path | Who | Requirement |
+|---|---|---|
+| Teaching path | active Instructor role | A current `cohort_instructors` row (`removed_at IS NULL`) covering the challenge's course or the requested cohort. Scope is limited to those classes and their courses. |
+| Administrative path | active Administrator role | An explicitly authorized administrative capability. **No Instructor role and no teaching assignment is required or implied.** Scope is all courses and classes, still subject to active-role authorization, administrator MFA and privileged step-up where the operation changes grades. |
+
+Consequences, applied consistently:
+
+- An administrator does **not** need to be added to a class to author, publish, assign, or review.
+- An administrator's authority comes from the Administrator role, not from acquiring an Instructor
+  assignment. The system must not auto-create `cohort_instructors` rows for administrators.
+- An instructor with a live assignment is never given administrator breadth; their scope stays
+  class-bound.
+- A Manager cannot use `/instructor/*` for writes under any circumstance, and cannot self-assign as
+  instructor. Manager access is read-only and separate (`/admin/cohorts/.../challenge-results`).
+- A Student cannot reach any `/instructor/*` or `/admin/*` route, even with a second assigned role,
+  unless that role is the session's active role.
+- An administrator who also holds an Instructor role is evaluated on the **active** role of the
+  current session; switching to Instructor narrows scope to their own classes.
+
 | Method | Path | Active role | Authorization and behavior |
 |---|---|---|---|
-| POST | `/instructor/challenges` | Instructor, Administrator | Instructor must have a live cohort assignment for the challenge course; Administrator any course. Creates draft challenge + draft version 1. `201`. |
-| GET | `/instructor/challenges` | Instructor, Administrator | Scope: courses where the instructor has a live assignment. Filters `course_id`, `module_id`, `status`; paginated. `200`. |
-| GET | `/instructor/challenges/{challenge_id}` | Instructor, Administrator | `404` when not in scope. `200`. |
-| PATCH | `/instructor/challenges/{challenge_id}` | Instructor, Administrator | Draft-only metadata. `200`; `409` if a published version exists and the field is immutable. |
-| POST | `/instructor/challenges/{challenge_id}/versions` | Instructor, Administrator | Creates new draft version from current. `201`; `409` if the challenge has zero published versions and v1 is still draft. |
-| PATCH | `/instructor/challenge-versions/{version_id}` | Instructor, Administrator | Draft version only. Verification config, max points, attempt limit, window. `200`; `409` once published or attempted. |
-| POST | `/instructor/challenge-versions/{version_id}/publish` | Instructor, Administrator | Validates completeness; sets `published_at`; updates challenge status/current version. `200`; `422` when invalid; `409` when already published. |
-| POST | `/instructor/challenges/{challenge_id}/assignments` | Instructor, Administrator | Body: `cohort_id`, `challenge_version_id`, optional narrowed window. Live instructor assignment to cohort required. `201`; `409` duplicate; `422` course/version mismatch. |
-| GET | `/instructor/challenges/{challenge_id}/assignments` | Instructor, Administrator | Scoped list. `200`. |
-| POST | `/instructor/challenge-assignments/{assignment_id}/withdraw` | Instructor, Administrator | Soft close; refuses if submission in flight. `200`; `404` out of scope. |
-| GET | `/instructor/cohorts/{cohort_id}/challenges` | Instructor, Administrator | Class challenge list. One row per **assignment** in that cohort, with `assignment_id`, challenge title, version, completion count and mean score. `404` if not live-assigned. `200`. |
-| GET | `/instructor/challenge-assignments/{assignment_id}/results` | Instructor, Administrator | Paginated per-enrollment rows for that one assignment: attempts used, best verdict, awarded points, adjustment total. `404` when the assignment is outside a live assignment of the caller. Results are assignment-scoped because one challenge may be assigned to several classes or versions. |
-| GET | `/instructor/challenge-assignments/{assignment_id}/attempts/{attempt_id}` | Instructor, Administrator | Verdict detail, redacted submission digest, evidence metadata. `200`; `404` when the attempt belongs to another assignment or class. |
-| POST | `/instructor/challenge-awards/{award_id}/adjustments` | Instructor, Administrator | Requires an existing award inside a live-assigned cohort. Body: `delta_points`, `points_before`, `reason`. Recent privileged reauthentication required. Records before/after and an audit row. `201`; `404` award outside scope; `409` stale `points_before` or the resulting score would leave `[0, max_points_snapshot]`; `422` zero delta, empty reason, or invalid `points_before`. |
-| GET | `/admin/cohorts/{cohort_id}/challenge-results` | Manager, Administrator | Read-only class challenge statistics by assignment, same shape as instructor results. Managers cannot adjust scores. `200`. |
+| POST | `/instructor/challenges` | Instructor (live course assignment) **or** Administrator (no assignment needed) | Creates draft challenge + draft version 1. `201`. |
+| GET | `/instructor/challenges` | Instructor (live assignment) **or** Administrator | Scope: Instructor = courses with a live assignment; Administrator = all courses. Filters `course_id`, `module_id`, `status`; paginated. `200`. |
+| GET | `/instructor/challenges/{challenge_id}` | Instructor (live assignment) **or** Administrator | Instructor: `404` when not in scope. Administrator: `200`. |
+| PATCH | `/instructor/challenges/{challenge_id}` | Instructor (live assignment) **or** Administrator | Draft-only metadata. `200`; `409` if a published version exists and the field is immutable. |
+| POST | `/instructor/challenges/{challenge_id}/versions` | Instructor (live assignment) **or** Administrator | Creates new draft version from current. `201`; `409` if the challenge has zero published versions and v1 is still draft. |
+| PATCH | `/instructor/challenge-versions/{version_id}` | Instructor (live assignment) **or** Administrator | Draft version only. Verification config, max points, attempt limit, window. `200`; `409` once published or attempted. |
+| POST | `/instructor/challenge-versions/{version_id}/publish` | Instructor (live assignment) **or** Administrator | Validates completeness; sets `published_at`; updates challenge status/current version. `200`; `422` when invalid; `409` when already published. |
+| POST | `/instructor/challenges/{challenge_id}/assignments` | Instructor (live cohort assignment) **or** Administrator | Body: `cohort_id`, `challenge_version_id`, optional window and status. `201`; `409` duplicate; `422` course/version mismatch. |
+| GET | `/instructor/challenges/{challenge_id}/assignments` | Instructor (live assignment) **or** Administrator | Scoped list. `200`. |
+| POST | `/instructor/challenge-assignments/{assignment_id}/withdraw` | Instructor (live cohort assignment) **or** Administrator | Soft close; refuses if a submission is in flight. `200`; Instructor out of scope is `404`. |
+| GET | `/instructor/cohorts/{cohort_id}/challenges` | Instructor (live cohort assignment) **or** Administrator | Class challenge list. One row per **assignment** in that cohort with `assignment_id`, challenge title, version, completion count and mean score. Instructor out of scope: `404`. `200`. |
+| GET | `/instructor/challenge-assignments/{assignment_id}/results` | Instructor (live cohort assignment) **or** Administrator | Paginated per-enrollment rows for that one assignment: attempts used, best verdict, awarded points, adjustment total. Instructor out of scope: `404`. Assignment-scoped because one challenge may be assigned to several classes or versions. |
+| GET | `/instructor/challenge-assignments/{assignment_id}/attempts/{attempt_id}` | Instructor (live cohort assignment) **or** Administrator | Verdict detail, redacted submission digest, evidence metadata. `200`; `404` when the attempt belongs to another assignment or class for an Instructor. |
+| POST | `/instructor/challenge-awards/{award_id}/adjustments` | Instructor (live cohort assignment) **or** Administrator | Requires an existing award. Body: `delta_points`, `points_before`, `reason`. **Recent privileged reauthentication is required for both roles.** Records before/after and an audit row. `201`; `404` award outside an Instructor's scope; `409` stale `points_before` or the resulting score would leave `[0, max_points_snapshot]`; `422` zero delta, empty reason, or invalid `points_before`. |
+| GET | `/admin/cohorts/{cohort_id}/challenge-results` | Manager **or** Administrator | Read-only class challenge statistics by assignment, same shape as instructor results. Managers cannot adjust scores. `200`. |
 
 Managers may inspect class-level challenge progress and scoring statistics. Managers may not author,
 assign, verify or adjust challenge results in 03A; a later milestone may widen this after review.
 Score adjustment is out of scope for managers in every 03 milestone unless an explicit later decision
-changes it.
+changes it. Managers are never granted Instructor write permissions by any route, and Manager is not a
+substitute for Administrator.
 
 **Target-profile routes are 03D routes.** `POST /admin/challenge-target-profiles`,
 `POST /admin/challenge-target-profiles/{id}/approve` and
@@ -647,9 +678,9 @@ of them. Only `(enrollment_id, assignment_id)` identifies one attemptable unit.
 
 | Method | Path | Active role | Authorization and behavior |
 |---|---|---|---|
-| GET | `/me/enrollments/{enrollment_id}/challenges` | Student owner | Assignments visible for exactly that enrollment: active/scheduled class, effective window, published version. Returns `assignment_id`, `challenge_id`, per-assignment instance status and points. `200`; `404` when the enrollment is not the caller's. |
+| GET | `/me/enrollments/{enrollment_id}/challenges` | Student owner | Assignments visible for exactly that enrollment: `active` enrollment in an `active` cohort, published version. Returns `assignment_id`, `challenge_id`, per-assignment status, availability window and points. `404` when the enrollment is not the caller's. Scheduled assignments may appear with `attemptable: false`; see 6.2.1. |
 | GET | `/me/challenge-assignments/{assignment_id}` | Student owner | Instructions, authorized target description, resources, attempt allowance, earned points, and the owning `enrollment_id`. **No flag, digest, verifier detail or target credentials.** `200`; `404` when the assignment does not belong to an active enrollment of the caller. |
-| POST | `/me/enrollments/{enrollment_id}/challenge-assignments/{assignment_id}/instance` | Student owner | Idempotently issues or returns the instance for exactly this enrollment and assignment. `201` first issue, `200` existing; `403` inactive enrollment; `404` when the assignment is not in this enrollment's cohort; `409` window closed or challenge not assigned to that cohort; `410` instance revoked. |
+| POST | `/me/enrollments/{enrollment_id}/challenge-assignments/{assignment_id}/instance` | Student owner | Idempotently issues or returns the instance for exactly this enrollment and assignment. `201` first issue, `200` existing; `403` inactive enrollment; `404` when the assignment is not in this enrollment's cohort; `409` cohort not `active`, availability window not open or already closed, or assignment withdrawn/closed; `410` instance revoked. No instance is issued for a merely scheduled assignment. |
 | GET | `/me/enrollments/{enrollment_id}/challenge-assignments/{assignment_id}/instance` | Student owner | Own instance state, attempts used/remaining, deadline. `200`; `404`. |
 | POST | `/me/challenge-instances/{instance_id}/attempts` | Student owner | Body: `kind` + `flag` or `evidence_submission_id`. Instance ownership is resolved from the instance row, not from the request. Requires `Idempotency-Key`. `201` accepted, `200` replay, `202` pending review (03C), `409` already solved or limit reached, `410` expired/revoked, `422` malformed, `429` throttled, `501` method not enabled. |
 | GET | `/me/challenge-instances/{instance_id}/attempts` | Student owner | Own attempt history, newest first, paginated. `200`; `404`. |
@@ -663,7 +694,10 @@ of them. Only `(enrollment_id, assignment_id)` identifies one attemptable unit.
    returns `403` for someone else's enrollment.
 2. Loads the assignment and requires `assignment.cohort_id == enrollment.cohort_id`. An assignment in
    another class, even for the same course and same challenge, is `404`.
-3. Requires the enrollment to be `active` and the cohort to be `active` or `scheduled`.
+3. Requires the enrollment to be `active` and the cohort to be `active`. `CourseCohort.status` has
+   exactly four values — `draft`, `active`, `completed`, `archived` — and only `active` authorizes
+   challenge work. There is no `scheduled` cohort status; scheduling is a property of the
+   assignment's availability window, not of the cohort.
 4. Never "picks the first matching enrollment". A given `(enrollment_id, assignment_id)` pair resolves
    to at most one instance; if the pair is valid but the student is also enrolled elsewhere, that
    other enrollment is a separate scope with separate instances, attempts and awards.
@@ -682,6 +716,31 @@ Convenience aggregate routes are additive only and must not weaken the above:
 - There is no `GET /me/challenges/{challenge_id}` and no
   `POST /me/challenges/{challenge_id}/instance`. A challenge identifier alone is ambiguous and would
   force the backend to guess an enrollment, which is prohibited.
+
+#### 6.2.1 Cohort status, assignment status and the availability window
+
+These are three distinct concepts and must not be conflated:
+
+| Concept | Values | Effect on student work |
+|---|---|---|
+| `CourseCohort.status` (existing 02B lifecycle, unchanged) | `draft`, `active`, `completed`, `archived` | Only `active` authorizes instance issuance and attempts. `draft` is invisible. `completed` and `archived` are read-only history: no issuance, no submissions. |
+| `challenge_assignments.status` (new, 03A) | `scheduled`, `active`, `closed`, `withdrawn` | `scheduled` = published but not yet open. `active` = open. `closed`/`withdrawn` = no further submissions. |
+| Availability window (`availability_starts_at` .. `availability_ends_at`) | timestamps, may be `NULL` | The effective window is the **intersection** of the version default and the assignment window. Outside it, no issuance and no attempts. |
+
+**Scheduled assignment visibility policy.** A student may *see* a scheduled assignment so they can
+prepare, but seeing it never authorizes work:
+
+- `GET /me/enrollments/{enrollment_id}/challenges` includes scheduled assignments with
+  `attemptable: false`, `availability_starts_at`, and no instance or score data. This is a deliberate
+  preparation affordance and reveals only published instructions that the class will need.
+- `GET /me/challenge-assignments/{assignment_id}` returns instructions and the window with
+  `attemptable: false`. It does not return an instance, attempt count or earned points.
+- `POST .../instance` returns `409` before the window opens. It never issues a pre-loaded instance.
+- Scheduling does not grant access to a target, a resource download, or a verification endpoint.
+
+Instructors set `challenge_assignments.status = 'scheduled'` and the relevant timestamps at
+assignment time; a background transition to `active` is optional and must never be required for
+correctness, because the server evaluates status and window on every request.
 
 ### 6.3 Request validation and response rules
 
@@ -745,24 +804,29 @@ not swallowed.
 | Capability | Student | Instructor | Manager | Administrator |
 |---|---|---|---|---|
 | List challenge assignments for an enrollment | own enrollment only | no (student routes) | no | no |
-| Read one challenge assignment | own enrollment, matching cohort | no | no | no |
-| Issue/read instance | own enrollment + assignment in that cohort | no | no | no |
+| Read one challenge assignment | own enrollment, `active` cohort | no | no | no |
+| Issue/read instance | own enrollment + assignment in that `active` cohort | no | no | no |
 | Submit attempt | own instance, own active enrollment | no | no | no |
 | Read own attempt history and scores | own enrollment only | no | no | no |
 | Download own challenge resource (03C) | own enrollment + assignment | no | no | no |
-| Create/edit draft challenge | no | live-assigned course | no | yes |
-| Publish version | no | live-assigned course | no | yes |
-| Assign published version to a class | no | live-assigned cohort | no | yes |
-| Read class challenge results | no | live-assigned cohort, by assignment | read-only, by assignment | yes |
+| Create/edit draft challenge | no | live-assigned course | no | **yes — no teaching assignment required** |
+| Publish version | no | live-assigned course | no | **yes — no teaching assignment required** |
+| Assign published version to a class | no | live-assigned cohort | no | **yes — any cohort, no assignment required** |
+| Read class challenge results | no | live-assigned cohort, by assignment | read-only, by assignment | yes, any cohort |
 | Adjust an existing award | no | live-assigned cohort + step-up | no | yes + step-up |
 | Create standalone bonus/penalty (no award) | no | deferred to 03E | no | deferred to 03E |
 | Manage central target profiles (03D) | no | no | no | yes + MFA |
-| Withdrawn enrollment / removed instructor | own history only, no new attempts | access ends next request | existing history | existing history |
+| Withdrawn enrollment / removed instructor | own history only, no new attempts | access ends next request | existing history | existing history (role unaffected) |
 
-Role is never sufficient on its own: every request re-validates enrollment status, cohort status,
-live instructor assignment, assignment-to-cohort membership and challenge scope. A student identifier
-supplied by the client is only a lookup key; the authoritative ownership comes from the session plus
-the enrollment row.
+Two independent paths grant `/instructor/*` access: **Instructor** with a current teaching assignment,
+or **Administrator** with an explicitly authorized administrative capability. Administrator never
+requires, and never receives, an implied teaching assignment. Instructor scope never widens into
+administrative scope. Manager never gains Instructor write permissions.
+
+Role is never sufficient on its own: every request re-validates enrollment status, cohort status
+(must be `active` for student work), live instructor assignment, assignment-to-cohort membership and
+challenge scope. A student identifier supplied by the client is only a lookup key; the authoritative
+ownership comes from the session plus the enrollment row.
 
 ## 8. Performance and capacity
 
@@ -839,11 +903,24 @@ Design targets: 50 registered participants, ~50 concurrent authenticated submiss
     files are not readable by instructors; no automatic full award.
 15. Authorization matrix tests: student-to-student, instructor-to-unassigned-class, manager write
     attempts, administrator step-up, withdrawn enrollment, removed instructor.
-16. Foreign resource IDs return `404`; rate limits return `429`; Origin/CSRF enforcement on all
+16. **Administrator without teaching assignment:** an Administrator who holds no `cohort_instructors`
+    row can create a challenge, publish a version, assign it to a cohort, read results and adjust an
+    award; no assignment row is created as a side effect; the audit trail records the Administrator
+    role. The same operations as an Administrator still require privileged step-up for adjustments and
+    MFA where configured.
+17. **Role separation:** a Manager calling any `/instructor/*` write route gets `403`/`404` and cannot
+    self-assign as instructor; an Instructor cannot read another class's results even when they also
+    hold an Administrator role, unless the session's active role is Administrator; an Administrator
+    who switches to Instructor loses administrative breadth for that session.
+18. **Cohort status gating:** instance issuance and attempts succeed only with an `active` enrollment
+    in an `active` cohort; `draft`, `completed` and `archived` cohorts refuse issuance and submission;
+    a `scheduled` assignment in an `active` cohort is visible with `attemptable: false` and refused at
+    issuance with `409`; no code path accepts or invents a `scheduled` cohort status.
+19. Foreign resource IDs return `404`; rate limits return `429`; Origin/CSRF enforcement on all
     mutations.
-17. 50-concurrent-submission load test with p95 and error-rate report, asserting zero duplicate
+20. 50-concurrent-submission load test with p95 and error-rate report, asserting zero duplicate
     awards and zero duplicate audit rows.
-18. Contract parity: generated OpenAPI matches committed contract after implementation (Codex check).
+21. Contract parity: generated OpenAPI matches committed contract after implementation (Codex check).
 
 ## 11. Unresolved architectural decisions
 

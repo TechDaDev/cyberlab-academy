@@ -42,6 +42,12 @@ architecture. Browser-based educational simulation unrelated to Kali remains val
 - Student work is identified by `(enrollment_id, assignment_id)`. A bare challenge id is never
   actionable, because one challenge may be assigned to several classes and one student may hold
   several enrollments.
+- Challenge work requires an `active` enrollment in an `active` cohort. The cohort lifecycle keeps its
+  existing four values (`draft`, `active`, `completed`, `archived`); assignment scheduling is an
+  availability window, not a cohort status.
+- Instructor routes accept two separate paths: an Instructor with a current teaching assignment, or an
+  Administrator with administrative authority. Administrator access never requires or implies a
+  teaching assignment; Instructor scope never widens into administrative scope; Managers gain neither.
 - The server never executes student commands, never accepts a student-supplied internal URL or host,
   and never allocates a Kali VM per participant.
 - Practical scores derive from authoritative awards plus append-only audited adjustments. An

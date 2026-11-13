@@ -4,6 +4,8 @@
 **Prepared:** 2026-11-12.  
 **Revised:** 2026-11-13 — 03A scope narrowed to flag verification, enrollment-scoped APIs,
 award-bound adjustments, cross-table invariants and explicit 03C/03D boundaries.  
+**Revised again:** 2026-11-13 — 03B limited to the flag method present in the 03A contract; evidence
+upload and its UI move to 03C; cohort status and Administrator authorization aligned.  
 **Baseline:** `TechDaDev/cyberlab-academy` `main` at `9afc37fc986e1b530f26c53efa35ecd05c80958c`.  
 **Precondition:** Milestone 02C must be accepted and merged, and this architecture must be reviewed
 and approved by ChatGPT, before 03A implementation begins.
@@ -28,7 +30,7 @@ and approved by ChatGPT, before 03A implementation begins.
 | Milestone | Scope | Owner | Depends on |
 |---|---|---|---|
 | 03A | Challenge Engine Backend — definitions, versions, assignments, enrollment-bound instances, flag verification, submissions, awards, audited adjustments, score reporting, authorization and concurrency. **Flag method only operational.** | DeepSeek | 02C accepted; this architecture approved |
-| 03B | Challenge Frontend | Arena AI | 03A merged and contract committed |
+| 03B | Challenge Frontend — instructor management, student flag submission, scores, reporting. **Flag method only; no evidence upload.** | Arena AI | 03A merged and contract committed |
 | 03C | Local Kali Challenge Packages — complete per-student exercises with discoverable flags, resources, evidence workflow | DeepSeek + Arena AI | 03A; content owner sign-off |
 | 03D | Isolated Central Training Targets — operational targets and trusted target verification | DeepSeek + college infrastructure | 03A; network/host approval |
 | 03E | Advanced Assessment — scoring policies beyond award-bound adjustments, reporting, gradebook | DeepSeek + Arena AI | 03B, 03C/03D evidence in production |
@@ -131,39 +133,68 @@ application.
 ## Milestone 03B — Challenge Frontend
 
 **Owner:** Arena AI.  
-**Goal:** instructor challenge management, student practical interface, submission and reporting UIs
-against the committed 03A contract.
+**Goal:** instructor challenge management, student flag-submission interface and reporting UIs
+**strictly against the committed 03A contract**. 03B integrates only what 03A implements.
+
+### Scope gate
+
+03B may consume only operations and fields present in the committed 03A OpenAPI document. The 03A
+contract enables **flag verification only**; `evidence` and `trusted_target` return `501`. Therefore:
+
+- 03B implements the functional **flag submission** and scoring interface end to end.
+- 03B does **not** implement, advertise or enable an evidence-upload UI. No upload control, no
+  evidence drop zone, no "attach report" affordance, no scan-status display, and no copy implying
+  that evidence submission is available.
+- 03B must handle `501 method_not_enabled` as an explicit "not available yet" state, never as a
+  success, pending grade, or silent fallback.
+- If the 03A contract does not expose a field, 03B must not render it from placeholder or guessed
+  data.
 
 ### Deliverables
 
 1. Instructor: challenge list, draft editor, version history, publication checklist, class assignment,
    class results table with attempt detail, adjustment dialog with mandatory reason and
    reauthentication.
-2. Student: assigned challenge list, instructions and authorized target description, attempt counter
-   and deadline, flag submission form, evidence upload with progress and limits, validation feedback,
-   attempt history, per-enrollment challenge score summary.
-3. Manager/administrator: read-only class challenge statistics.
-4. Clear labeling that practical points are separate from 02C course reading progress.
+2. Student: assigned challenge list (including `attemptable: false` scheduled assignments),
+   instructions and authorized target description, availability window, attempt counter and
+   deadline, **flag submission form**, validation feedback, attempt history, per-enrollment challenge
+   score summary.
+3. Manager/administrator read-only class challenge statistics.
+4. Clear labeling that practical points are separate from 02C course reading progress, and that a
+   challenge configured with an unshipped method is not yet playable.
 5. Accessible, responsive, keyboard-operable UI; explicit security messaging ("no attacks outside the
    authorized scope"); no secret, flag prefix or verifier detail rendered.
 6. Frontend tests for submission, error and throttle states; contract-typed clients; no guessed
    endpoints.
-7. Frontend report documenting screens, states and accessibility checks.
+7. Frontend report documenting screens, states, accessibility checks, and the exact 03A operations
+   consumed.
+
+### Explicit non-goals
+
+- No evidence upload, evidence queue, scan-status display or instructor evidence review (03C).
+- No training-target connection UI, probe result display or target selection (03D).
+- No client-side score computation, score editing, or local grade persistence.
+- No new backend route, contract field or migration from the frontend branch.
 
 ### Acceptance criteria
 
 - No flag, seed, digest, target credential or other student's data appears in any client payload or
   rendered page.
-- Attempt-limit, expired-instance, `409`, `410`, `422` and `429` states are handled distinctly.
-- Instructor cannot select a class outside their live assignments.
+- Attempt-limit, expired-instance, `409`, `410`, `422`, `429` and `501` states are handled distinctly.
+- No evidence-upload affordance exists anywhere in the 03B UI; a challenge whose method is not enabled
+  renders as not yet available and never shows a score.
+- Instructor cannot select a class outside their live assignments; an Administrator can act without a
+  teaching assignment, matching the backend rule.
 - Adjustments require a reason and show before/after values; no client-side score editing.
 - Empty, loading, error and unauthorized states are designed, not improvised.
 - Screen-reader and keyboard checks pass; responsive layouts verified at lab-computer widths.
 
 ### Required independent QA (Codex)
 
-Contract parity, authorization-state handling in the UI, secret non-exposure, CSRF/Origin behavior,
-and verification that the UI cannot submit a client-controlled score or enrollment id.
+Contract parity (no consumed route or field absent from the 03A contract), absence of any premature
+evidence-upload UI, disabled-method rendering, authorization-state handling in the UI, secret
+non-exposure, CSRF/Origin behavior, and verification that the UI cannot submit a client-controlled
+score or enrollment id.
 
 ---
 
@@ -186,8 +217,10 @@ materials.
 3. Challenge package specification: instructions, scope statement, allowed tools, deliverables, time
    estimate, evidence requirements, where the student is expected to discover the flag, and explicit
    prohibition of out-of-scope attacks.
-4. Evidence workflow completion: upload, scanning, instructor review queue, accept/reject with reason,
-   award or adjustment creation.
+4. Evidence workflow completion — **backend and UI together**: upload endpoint, scanning, instructor
+   review queue, accept/reject with reason, award or adjustment creation, plus the student upload
+   control, progress, scan status and review state in the frontend. The evidence method is enabled at
+   the end of this milestone; until then the UI keeps showing the 03B "not yet available" state.
 5. Local-lab verification guidance: which challenges are flag-verified, which require evidence review,
    and why local evidence alone is not proof of completion.
 6. Documentation for instructors on authoring a safe local-lab challenge and choosing a verification
@@ -207,6 +240,9 @@ materials.
   acceptable for the challenge's stakes. A greppable flag is permitted only for low-stakes local-lab
   work, never for an official grade, which requires trusted target verification (03D) or reviewed
   evidence.
+- Evidence submission is not presented to students before this milestone completes: the backend
+  method is implemented and enabled first, then the UI is activated. No 03B screen offers an evidence
+  upload control.
 - Two students in the same class receive different flags; a student enrolled in two classes receives
   two independent packages and two independent instance scopes.
 - Uploaded evidence cannot be auto-awarded full points; a human decision or a specifically approved

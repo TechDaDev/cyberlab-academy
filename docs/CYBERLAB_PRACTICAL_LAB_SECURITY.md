@@ -4,6 +4,8 @@
 **Prepared:** 2026-11-12.  
 **Revised:** 2026-11-13 — aligned with enrollment-scoped student routes, award-bound adjustments,
 rejected score bounds, central-target-only profiles and verification-method gating.  
+**Revised again:** 2026-11-13 — separate Instructor and Administrator authorization paths; frontend may
+not expose a verification method before its backend is enabled.  
 **Baseline:** `TechDaDev/cyberlab-academy` `main` at `9afc37fc986e1b530f26c53efa35ecd05c80958c`.  
 **Applies to:** Milestones 03A–03E (challenge engine, evidence handling, isolated training targets).
 
@@ -109,11 +111,17 @@ Each threat lists the primary controls. "Residual risk" is what remains after 03
 ### T5 — Instructor access to unrelated classes
 
 - **Risk:** an instructor reads or modifies another class's challenges or scores.
-- **Controls:** live assignment check (`cohort_instructors.removed_at IS NULL`) on every request;
-  scope by `cohort_id`, never by `course_id` alone; instructor-authored challenges limited to courses
-  with a live assignment; class result reads are assignment-scoped and require the exact cohort match
-  for that assignment; score adjustments require the award's enrollment to be in a live-assigned
-  cohort; removal revokes access on the next request.
+- **Controls:** live assignment check (`cohort_instructors.removed_at IS NULL`) on every request for
+  the **Instructor** path; scope by `cohort_id`, never by `course_id` alone; instructor-authored
+  challenges limited to courses with a live assignment; class result reads are assignment-scoped and
+  require the exact cohort match for that assignment; score adjustments require the award's enrollment
+  to be in a live-assigned cohort; removal revokes access on the next request.
+- **Administrator path is separate and deliberate:** an Administrator reaches the same routes through
+  administrative authority, not a teaching assignment. No `cohort_instructors` row is created for them,
+  and the Instructor-scope checks do not apply. Administrator access still requires the active
+  Administrator role, administrator MFA, and privileged step-up for adjustments; every action is
+  audited with the Administrator role. Instructor scope is never widened into administrative scope, and
+  a Manager never gains either.
 - **Residual:** an instructor legitimately assigned to two classes may compare them; acceptable. An
   instructor who is removed mid-term may already have read data; `no-store` and the audit trail limit
   the impact.
@@ -262,6 +270,10 @@ Each threat lists the primary controls. "Residual risk" is what remains after 03
 - **Milestone 03A scope:** the challenge engine verifies flags and records audited scores. It ships no
   usable Kali exercise artifact, no evidence pipeline and no live training target. Testing uses
   synthetic fixture flags that are unreachable from student routes.
+- **Frontend follows the backend, not the plan:** a UI must never expose an evidence-upload control,
+  target-selection control or "pending review" state before the corresponding backend method is
+  enabled. 03B is flag-only; evidence UI arrives in 03C, target UI in 03D. A `501` from a disabled
+  method is rendered as "not available", never as a grade.
 
 ## 5. Isolated laboratory network design (03D)
 
